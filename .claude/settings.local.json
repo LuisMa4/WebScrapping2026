@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\LM\\\\Documents\\\\Proyectos\\\\WebScrapping\\\\sivml\\\\config\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\LM\\\\Documents\\\\Proyectos\\\\WebScrapping\\\\sivml\\\\scrapers\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\LM\\\\Documents\\\\Proyectos\\\\WebScrapping\\\\sivml\\\\database\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\LM\\\\Documents\\\\Proyectos\\\\WebScrapping\\\\sivml\\\\processing\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\LM\\\\Documents\\\\Proyectos\\\\WebScrapping\\\\sivml\\\\exports\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\LM\\\\Documents\\\\Proyectos\\\\WebScrapping\\\\sivml\\\\cli\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\LM\\\\Documents\\\\Proyectos\\\\WebScrapping\\\\sivml\\\\tests\\\\fixtures\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\LM\\\\Documents\\\\Proyectos\\\\WebScrapping\\\\sivml\\\\output\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\LM\\\\Documents\\\\Proyectos\\\\WebScrapping\\\\sivml\\\\dashboard\")"
+    ]
+  }
+}

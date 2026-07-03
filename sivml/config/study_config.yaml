@@ -1,0 +1,41 @@
+# ============================================================
+# Configuración del estudio de mercado laboral
+# Editar antes de ejecutar: python main.py scrape --config config/study_config.yaml
+# ============================================================
+
+study_name: "Demanda Laboral - Salud Pública 2026"
+
+# Programa académico al que está orientado este estudio
+academic_program: "Maestría en Salud Pública"
+
+# Palabras clave de búsqueda (se prueban todas las combinaciones con ciudades)
+keywords:
+  - "salud pública"
+  - "epidemiología"
+  - "gestión hospitalaria"
+  - "médico salubrista"
+  - "coordinador de salud"
+
+# Ciudades a buscar
+cities:
+  - "Lima"
+  - "Arequipa"
+  - "Trujillo"
+
+# Portales a usar (deben coincidir con claves del REGISTRY en scrapers/__init__.py)
+portals:
+  - computrabajo
+  - indeed
+  - bumeran
+
+# Rango de fechas de las ofertas a considerar
+date_from: "2026-01-01"
+date_to: "2026-12-31"
+
+# Configuración del scraper (opcional — valores por defecto si se omite)
+scraper:
+  delay_range: [2.0, 5.0]   # segundos entre peticiones (min, max)
+  max_retries: 3
+  max_pages: 30              # máximo de páginas por búsqueda (keyword × ciudad)
+  headless: true             # false para ver el navegador durante el scraping
+  timeout_ms: 30000

@@ -1,0 +1,14 @@
+# Normalización de empresas: variante → nombre canónico
+# Los sufijos legales (S.A.C., S.R.L., etc.) se eliminan automáticamente antes de buscar aquí
+
+"minsa": "Ministerio de Salud"
+"ministerio de salud del peru": "Ministerio de Salud"
+"ministerio de salud del perú": "Ministerio de Salud"
+"essalud": "EsSalud"
+"es salud": "EsSalud"
+"seguro social de salud": "EsSalud"
+"hospital nacional": "Hospital Nacional"
+"clinica": "Clínica"
+"clinica internacional": "Clínica Internacional"
+"clinica san pablo": "Clínica San Pablo"
+"grupo auna": "Grupo Auna"

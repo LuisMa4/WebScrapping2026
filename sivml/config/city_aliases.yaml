@@ -1,0 +1,72 @@
+# Normalización de ciudades: variante → nombre canónico
+# Agregar entradas según los valores que devuelvan los portales
+
+# Lima - Perú
+"lima metropolitana": "Lima"
+"lima, peru": "Lima"
+"lima - peru": "Lima"
+"lima perú": "Lima"
+"lima - perú": "Lima"
+"san isidro": "Lima"
+"miraflores": "Lima"
+"surco": "Lima"
+"san borja": "Lima"
+"la molina": "Lima"
+"jesús maría": "Lima"
+"lince": "Lima"
+"pueblo libre": "Lima"
+"barranco": "Lima"
+"chorrillos": "Lima"
+"lima norte": "Lima"
+"lima sur": "Lima"
+"lima este": "Lima"
+"callao": "Callao"
+
+# Arequipa - Perú
+"arequipa, peru": "Arequipa"
+"arequipa - peru": "Arequipa"
+"arequipa perú": "Arequipa"
+
+# Trujillo - Perú
+"trujillo, peru": "Trujillo"
+"trujillo - peru": "Trujillo"
+"trujillo - la libertad": "Trujillo"
+
+# Otras ciudades peruanas
+"cusco": "Cusco"
+"cuzco": "Cusco"
+"piura": "Piura"
+"chiclayo": "Chiclayo"
+"iquitos": "Iquitos"
+"huancayo": "Huancayo"
+"puno": "Puno"
+"tacna": "Tacna"
+"ica": "Ica"
+"ayacucho": "Ayacucho"
+"cajamarca": "Cajamarca"
+"huánuco": "Huánuco"
+"pucallpa": "Pucallpa"
+
+# Modalidad remota
+"remoto": "Remoto"
+"teletrabajo": "Remoto"
+"trabajo remoto": "Remoto"
+"home office": "Remoto"
+"virtual": "Remoto"
+"a distancia": "Remoto"
+
+# Colombia (para expansión futura)
+"bogotá": "Bogotá"
+"bogota": "Bogotá"
+"medellín": "Medellín"
+"medellin": "Medellín"
+"cali": "Cali"
+"barranquilla": "Barranquilla"
+
+# Ecuador
+"quito": "Quito"
+"guayaquil": "Guayaquil"
+
+# Chile
+"santiago": "Santiago"
+"santiago de chile": "Santiago"
