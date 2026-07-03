@@ -38,14 +38,19 @@ class JoobleScraper(BaseScraper):
 
     def _search_via_api(self, keyword: str, city: str) -> list[ScrapedJob]:
         import json
+        import time
         import requests
         from datetime import datetime
 
         jobs: list[ScrapedJob] = []
         session = requests.Session()
         session.headers["Content-Type"] = "application/json"
+        started_at = time.time()
 
         for page in range(1, self.config.scraper.max_pages + 1):
+            if self._time_budget_exceeded(started_at):
+                break
+
             payload = json.dumps({"keywords": keyword, "location": city, "page": page})
             try:
                 resp = session.post(

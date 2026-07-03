@@ -20,7 +20,7 @@ keywords:
 cities:
   - "Lima"
   - "Arequipa"
-  - "Trujillo"
+  - "Tacna"
 
 # Portales a usar (deben coincidir con claves del REGISTRY en scrapers/__init__.py)
 portals:

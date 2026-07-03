@@ -56,10 +56,21 @@ def run(python_exe: str, args: list[str], cwd: str) -> int:
     return subprocess.call(cmd, cwd=cwd)
 
 
+# Modulos de import de cada paquete en requirements.txt (excluyendo pytest/
+# pytest-asyncio, que son solo para desarrollo y no hacen falta para correr
+# el dashboard/CLI). Si falta CUALQUIERA de estos, se reinstala todo.
+_REQUIRED_MODULES = (
+    "playwright", "requests", "bs4", "lxml", "sqlalchemy", "pandas",
+    "numpy", "openpyxl", "rapidfuzz", "click", "dotenv", "yaml",
+    "streamlit", "plotly", "psutil",
+)
+
+
 def has_dependencies(python_exe: str, cwd: str) -> bool:
-    check_cmd = [python_exe, "-c", "import streamlit, playwright"]
+    probe = "; ".join(f"import {m}" for m in _REQUIRED_MODULES)
+    check_cmd = [python_exe, "-c", probe]
     if python_exe == "py":
-        check_cmd = ["py", "-3", "-c", "import streamlit, playwright"]
+        check_cmd = ["py", "-3", "-c", probe]
     return subprocess.call(
         check_cmd, cwd=cwd,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

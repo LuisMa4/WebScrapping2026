@@ -143,6 +143,24 @@ class BaseScraper(ABC):
         lo, hi = self.config.scraper.delay_range
         time.sleep(random.uniform(lo, hi))
 
+    def _time_budget_exceeded(self, search_started_at: float) -> bool:
+        """
+        True si ya paso el limite de tiempo configurado (`max_search_seconds`)
+        para la busqueda actual (una combinacion keyword+ciudad). Los
+        `search()` de cada portal deben llamar esto entre paginas y cortar la
+        paginacion si devuelve True -- mejor devolver resultados parciales que
+        colgar la busqueda indefinidamente (algunos portales, como LinkedIn,
+        pueden tardar minutos por pagina).
+        """
+        elapsed = time.time() - search_started_at
+        exceeded = elapsed > self.config.scraper.max_search_seconds
+        if exceeded:
+            self.logger.warning(
+                f"Limite de tiempo alcanzado ({elapsed:.0f}s > "
+                f"{self.config.scraper.max_search_seconds:.0f}s) -- cortando busqueda"
+            )
+        return exceeded
+
     def _build_source_id(self, url: str) -> str:
         import hashlib
         return hashlib.md5(url.encode()).hexdigest()

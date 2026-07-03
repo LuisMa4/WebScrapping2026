@@ -1,3 +1,5 @@
+from datetime import date, timedelta
+
 import pytest
 from processing.normalizer import (
     normalize_city,
@@ -7,6 +9,7 @@ from processing.normalizer import (
     normalize_modality,
     normalize_salary,
     normalize_title,
+    parse_relative_date,
 )
 
 
@@ -131,3 +134,40 @@ class TestNormalizeTitle:
 
     def test_none_input(self):
         assert normalize_title(None) is None
+
+
+class TestParseRelativeDate:
+    REF = date(2026, 7, 10)
+
+    def test_hoy(self):
+        assert parse_relative_date("Publicado hoy", reference=self.REF) == self.REF
+
+    def test_ayer(self):
+        assert parse_relative_date("Ayer", reference=self.REF) == date(2026, 7, 9)
+
+    def test_hace_n_horas_same_day(self):
+        assert parse_relative_date("Hace  5  horas", reference=self.REF) == self.REF
+
+    def test_hace_n_minutos_same_day(self):
+        assert parse_relative_date("Hace  18  minutos", reference=self.REF) == self.REF
+
+    def test_hace_n_dias(self):
+        assert parse_relative_date("Hace  2  días", reference=self.REF) == date(2026, 7, 8)
+
+    def test_hace_n_semanas(self):
+        assert parse_relative_date("Hace 2 semanas", reference=self.REF) == date(2026, 6, 26)
+
+    def test_hace_n_meses(self):
+        assert parse_relative_date("Hace 1 mes", reference=self.REF) == date(2026, 6, 10)
+
+    def test_bumeran_mas_de_n_dias(self):
+        assert parse_relative_date("Publicado hace mas de 15 dias", reference=self.REF) == date(2026, 6, 25)
+
+    def test_unrecognized_format_returns_none(self):
+        assert parse_relative_date("Fecha desconocida", reference=self.REF) is None
+
+    def test_none_input(self):
+        assert parse_relative_date(None) is None
+
+    def test_default_reference_is_today(self):
+        assert parse_relative_date("Ayer") == date.today() - timedelta(days=1)

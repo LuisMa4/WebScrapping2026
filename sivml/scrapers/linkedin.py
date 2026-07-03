@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 import urllib.parse
-from datetime import datetime
+from datetime import date, datetime
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import Page
@@ -32,8 +32,12 @@ class LinkedInScraper(BaseScraper):
     def search(self, keyword: str, city: str) -> list[ScrapedJob]:
         jobs: list[ScrapedJob] = []
         start = 0
+        started_at = time.time()
 
         for _ in range(self.config.scraper.max_pages):
+            if self._time_budget_exceeded(started_at):
+                break
+
             url = self._build_search_url(keyword, city, start)
 
             try:
@@ -64,11 +68,15 @@ class LinkedInScraper(BaseScraper):
             return {}
 
     def _build_search_url(self, keyword: str, city: str, start: int) -> str:
+        # f_TPR = "publicado en los ultimos N segundos" (parametro nativo de
+        # LinkedIn) -- deriva del date_from del estudio en vez de un fijo de
+        # 30 dias, asi el rango de fechas configurado se aplica de verdad.
+        days_ago = max(1, (date.today() - self.config.date_from).days)
         params = urllib.parse.urlencode({
             "keywords": keyword,
             "location": city,
             "start": start,
-            "f_TPR": "r2592000",  # último mes
+            "f_TPR": f"r{days_ago * 86400}",
         })
         return f"{_LINKEDIN_JOBS_URL}?{params}"
 

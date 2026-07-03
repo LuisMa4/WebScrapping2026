@@ -31,6 +31,24 @@ _UA = (
 _db_lock = threading.Lock()
 
 
+def _filter_by_date_range(jobs, cfg):
+    """
+    Descarta ofertas cuya fecha de publicacion (si se pudo extraer) cae fuera
+    de [cfg.date_from, cfg.date_to]. Las ofertas sin fecha reconocida (el
+    portal no la expone en el listado, o el formato no se pudo parsear) se
+    mantienen sin filtrar -- mejor mostrar una oferta de fecha incierta que
+    perderla por un filtro que no se puede aplicar con certeza.
+    """
+    kept = []
+    excluded = 0
+    for job in jobs:
+        if job.posted_date is not None and not (cfg.date_from <= job.posted_date <= cfg.date_to):
+            excluded += 1
+            continue
+        kept.append(job)
+    return kept, excluded
+
+
 def run_scraping(
     session,
     cfg: StudyConfig,
@@ -240,6 +258,7 @@ def _scrape_portal_fresh_ctx(session, cfg, study_id, dry_run, browser, portal_na
 
             try:
                 jobs = scraper.search(keyword, city)
+                jobs, excluded_by_date = _filter_by_date_range(jobs, cfg)
                 if not dry_run:
                     enriched = []
                     for job in jobs:
@@ -264,7 +283,8 @@ def _scrape_portal_fresh_ctx(session, cfg, study_id, dry_run, browser, portal_na
                 with _db_lock:
                     repo.finish_scraping_run(session, run.id,
                                               records_found=found, records_new=new_count)
-                log(f"    {keyword} / {city}: {found} encontradas, {new_count} nuevas")
+                date_note = f" ({excluded_by_date} fuera de rango de fechas)" if excluded_by_date else ""
+                log(f"    {keyword} / {city}: {found} encontradas, {new_count} nuevas{date_note}")
 
             except Exception as exc:
                 with _db_lock:
@@ -297,6 +317,7 @@ def _scrape_portal(session, cfg, study_id, dry_run, page, portal_name, log):
 
             try:
                 jobs = scraper.search(keyword, city)
+                jobs, excluded_by_date = _filter_by_date_range(jobs, cfg)
                 if not dry_run:
                     enriched = []
                     for job in jobs:
@@ -321,7 +342,8 @@ def _scrape_portal(session, cfg, study_id, dry_run, page, portal_name, log):
                 with _db_lock:
                     repo.finish_scraping_run(session, run.id,
                                               records_found=found, records_new=new_count)
-                log(f"    {keyword} / {city}: {found} encontradas, {new_count} nuevas")
+                date_note = f" ({excluded_by_date} fuera de rango de fechas)" if excluded_by_date else ""
+                log(f"    {keyword} / {city}: {found} encontradas, {new_count} nuevas{date_note}")
 
             except Exception as exc:
                 with _db_lock:

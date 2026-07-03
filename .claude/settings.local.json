@@ -9,7 +9,10 @@
       "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\LM\\\\Documents\\\\Proyectos\\\\WebScrapping\\\\sivml\\\\cli\")",
       "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\LM\\\\Documents\\\\Proyectos\\\\WebScrapping\\\\sivml\\\\tests\\\\fixtures\")",
       "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\LM\\\\Documents\\\\Proyectos\\\\WebScrapping\\\\sivml\\\\output\")",
-      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\LM\\\\Documents\\\\Proyectos\\\\WebScrapping\\\\sivml\\\\dashboard\")"
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\LM\\\\Documents\\\\Proyectos\\\\WebScrapping\\\\sivml\\\\dashboard\")",
+      "Bash(python -m PyInstaller SIVML.spec --distpath .. --workpath ../build --noconfirm)",
+      "Bash(timeout 90 ./Instalar_SIVML.exe)",
+      "Bash(python -c ' *)"
     ]
   }
 }

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -87,15 +87,8 @@ st.sidebar.divider()
 st.sidebar.caption("v1.0 - Peru")
 
 CITIES_PE = [
-    # Las 25 capitales de departamento del Peru + Callao + Remoto
-    # (verificado que cada slug de ciudad devuelve resultados reales en
-    # computrabajo/bumeran, julio 2026).
-    "Lima", "Arequipa", "Trujillo", "Cusco", "Piura", "Chiclayo",
-    "Iquitos", "Huancayo", "Tacna", "Callao",
-    "Chachapoyas", "Huaraz", "Abancay", "Ayacucho", "Cajamarca",
-    "Huancavelica", "Huanuco", "Ica", "Puerto Maldonado", "Moquegua",
-    "Cerro de Pasco", "Puno", "Tarapoto", "Tumbes", "Pucallpa",
-    "Remoto",
+    # Ciudades habilitadas para el estudio (alcance reducido, julio 2026).
+    "Lima", "Tacna", "Arequipa", "Moquegua", "Cusco", "Puno",
 ]
 MAX_KEYWORDS = 5  # cada keyword adicional puede sumar varios minutos por ciudad/portal
 from scrapers.portal_info import ACTIVE_PORTALS, INACTIVE_PORTALS
@@ -263,7 +256,7 @@ def page_nuevo_estudio():
         with col2:
             cities = st.multiselect(
                 "Ciudades *", CITIES_PE,
-                default=defaults.get("cities", ["Lima"]),
+                default=defaults.get("cities", list(CITIES_PE)),
             )
             portals = st.multiselect(
                 "Portales *", ALL_PORTALS,
@@ -272,7 +265,7 @@ def page_nuevo_estudio():
             )
             col_d1, col_d2 = st.columns(2)
             with col_d1:
-                date_from = st.date_input("Desde", value=date(2026, 1, 1))
+                date_from = st.date_input("Desde", value=date.today() - timedelta(days=7))
             with col_d2:
                 date_to = st.date_input("Hasta", value=date.today())
 
@@ -331,6 +324,8 @@ def page_nuevo_estudio():
             errors.append("Selecciona al menos una ciudad.")
         if not portals:
             errors.append("Selecciona al menos un portal.")
+        if date_from > date_to:
+            errors.append("La fecha 'Desde' no puede ser posterior a 'Hasta'.")
         if save_as_tpl and not tpl_name_input.strip():
             errors.append("Ingresa un nombre para la plantilla.")
 
@@ -640,7 +635,7 @@ def page_mis_estudios():
                             st.dataframe(prob[["Portal", "Keyword", "Ciudad", "Halladas", "Diagnostico"]], hide_index=True, use_container_width=True)
 
                 st.divider()
-                b1, b2, b3 = st.columns(3)
+                b1, b2, b3, b4 = st.columns(4)
                 with b1:
                     if st.button("Procesar", key=f"proc_{study.id}", use_container_width=True):
                         with st.spinner("Procesando..."):
@@ -669,6 +664,16 @@ def page_mis_estudios():
                     if st.button("Ver Resultados", key=f"view_{study.id}", use_container_width=True):
                         st.session_state["selected_study_id"] = study.id
                         st.info("Ve a la pestana Resultados.")
+                with b4:
+                    del_key = f"confirm_del_{study.id}"
+                    st.checkbox("Confirmar", key=del_key, help="Marca esta casilla y luego presiona Eliminar.")
+                    if st.button("Eliminar", key=f"del_{study.id}", use_container_width=True):
+                        if st.session_state.get(del_key):
+                            repo.delete_study(session, study.id)
+                            st.success(f"Estudio '{study.name}' eliminado.")
+                            st.rerun()
+                        else:
+                            st.error("Marca la casilla de confirmacion primero.")
     finally:
         session.close()
 
@@ -752,6 +757,9 @@ def page_mis_plantillas():
                                                help="Solo listing, sin descripcion completa. Mas rapido.")
 
                     if st.button("Lanzar scraping", type="primary", key=f"run_{tpl.id}", use_container_width=True):
+                        if run_date_from > run_date_to:
+                            st.error("La fecha 'Desde' no puede ser posterior a 'Hasta'.")
+                            st.stop()
                         repo.mark_template_used(session, tpl.id)
                         _run_new_study(
                             study_name=f"{tpl.name} ({run_date_from} / {run_date_to})",

@@ -106,6 +106,27 @@ def mark_study_failed(session: Session, study_id: str, reason: str = "Marcado co
     session.commit()
 
 
+def delete_study(session: Session, study_id: str) -> bool:
+    """
+    Borra un estudio y todo lo que depende de el (raw_jobs, jobs,
+    scraping_runs). Devuelve False si el estudio no existe.
+
+    Orden de borrado: hijos antes que el padre, para no violar las FK.
+    RawJob.canonical_id referencia a Job, asi que raw_jobs se borra antes
+    que jobs.
+    """
+    study = session.get(Study, study_id)
+    if not study:
+        return False
+
+    session.query(RawJob).filter(RawJob.study_id == study_id).delete(synchronize_session=False)
+    session.query(Job).filter(Job.study_id == study_id).delete(synchronize_session=False)
+    session.query(ScrapingRun).filter(ScrapingRun.study_id == study_id).delete(synchronize_session=False)
+    session.delete(study)
+    session.commit()
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Raw jobs
 # ---------------------------------------------------------------------------

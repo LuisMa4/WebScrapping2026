@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import urllib.parse
 from datetime import datetime
 
@@ -25,8 +26,12 @@ class LaborumScraper(BaseScraper):
 
     def search(self, keyword: str, city: str) -> list[ScrapedJob]:
         jobs: list[ScrapedJob] = []
+        started_at = time.time()
 
         for page_num in range(1, self.config.scraper.max_pages + 1):
+            if self._time_budget_exceeded(started_at):
+                break
+
             url = self._build_search_url(keyword, city, page_num)
 
             try:

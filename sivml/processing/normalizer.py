@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -276,3 +277,56 @@ def normalize_title(raw: str | None) -> str | None:
 
 def get_normalization_warnings() -> list[str]:
     return list(_NORMALIZATION_WARNINGS)
+
+
+# ---------------------------------------------------------------------------
+# Normalización de fecha relativa ("Hace 3 días", "Ayer", etc.)
+# ---------------------------------------------------------------------------
+
+_RELATIVE_DATE_RE = re.compile(
+    r"hace\s*(?:m[aá]s\s*de\s*)?(\d+)\s*(minuto|hora|d[ií]a|semana|mes)",
+    re.IGNORECASE,
+)
+
+
+def parse_relative_date(raw: str | None, reference: date | None = None) -> date | None:
+    """
+    Convierte strings de fecha relativa en español, tal como las muestran los
+    listados de Computrabajo/Bumeran (ej. "Hace 3 dias", "Ayer",
+    "Publicado hace mas de 15 dias"), a un date real.
+
+    Devuelve None si el formato no es reconocido -- el llamador debe tratar
+    eso como "fecha desconocida" (no filtrar por fecha), no como error.
+
+    "Hace X horas/minutos" se resuelve al dia de `reference` (no vale la pena
+    la precision de horas para un filtro a nivel de dia). "Hace mas de N dias"
+    (formato de Bumeran para ofertas antiguas) se aproxima a exactamente N
+    dias atras -- es una subestimacion de la antigüedad real, pero es lo
+    unico que expone el portal.
+    """
+    if not raw:
+        return None
+    ref = reference or date.today()
+    text = raw.strip().lower()
+
+    if "hoy" in text:
+        return ref
+    if "ayer" in text:
+        return ref - timedelta(days=1)
+
+    m = _RELATIVE_DATE_RE.search(text)
+    if not m:
+        return None
+
+    n = int(m.group(1))
+    unit = m.group(2).replace("í", "i").replace("á", "a")
+
+    if unit.startswith(("minuto", "hora")):
+        return ref
+    if unit.startswith("dia"):
+        return ref - timedelta(days=n)
+    if unit.startswith("semana"):
+        return ref - timedelta(weeks=n)
+    if unit.startswith("mes"):
+        return ref - timedelta(days=n * 30)
+    return None

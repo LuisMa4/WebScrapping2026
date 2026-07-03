@@ -4,7 +4,7 @@ from datetime import datetime, date
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from database.session import Base
@@ -235,3 +235,62 @@ class TestMarkStudyFailed:
 
     def test_missing_study_does_not_raise(self, session):
         repo.mark_study_failed(session, "does-not-exist")
+
+
+class TestDeleteStudy:
+    def _make_job(self, study_id, source_id="src-001"):
+        return ScrapedJob(
+            source_id=source_id,
+            portal="computrabajo",
+            url=f"https://example.com/{source_id}",
+            scraped_at=datetime.utcnow(),
+            title="Analista",
+            company="Empresa",
+            city="Lima",
+            study_id=study_id,
+            keyword_matched="analista",
+        )
+
+    def test_deletes_study_and_returns_true(self, session, study_config):
+        study = repo.create_study(session, study_config)
+        assert repo.delete_study(session, study.id) is True
+        assert repo.get_study(session, study.id) is None
+
+    def test_missing_study_returns_false(self, session):
+        assert repo.delete_study(session, "does-not-exist") is False
+
+    def test_cascades_to_raw_jobs_and_jobs_and_runs(self, session, study_config):
+        from processing.deduplicator import run_exact_dedup
+
+        study = repo.create_study(session, study_config)
+        repo.upsert_raw_job(session, self._make_job(study.id))
+        repo.start_scraping_run(session, study.id, "computrabajo", "analista", "Lima")
+        run_exact_dedup(session, study.id)
+
+        assert len(repo.get_raw_jobs_for_study(session, study.id)) == 1
+        assert len(repo.get_jobs_for_study(session, study.id)) == 1
+
+        repo.delete_study(session, study.id)
+
+        assert repo.get_raw_jobs_for_study(session, study.id) == []
+        assert repo.get_jobs_for_study(session, study.id) == []
+        remaining_runs = session.scalars(
+            select(ScrapingRun).where(ScrapingRun.study_id == study.id)
+        ).all()
+        assert remaining_runs == []
+
+    def test_does_not_affect_other_studies(self, session, study_config):
+        study_a = repo.create_study(session, study_config)
+        other_config = StudyConfig(
+            study_id="test-study-002", study_name="Otro estudio", academic_program="Prueba",
+            keywords=["analista"], cities=["Lima"], portals=["computrabajo"],
+            date_from=date(2026, 1, 1), date_to=date(2026, 12, 31), scraper=ScraperConfig(),
+        )
+        study_b = repo.create_study(session, other_config)
+        repo.upsert_raw_job(session, self._make_job(study_a.id, "src-a"))
+        repo.upsert_raw_job(session, self._make_job(study_b.id, "src-b"))
+
+        repo.delete_study(session, study_a.id)
+
+        assert repo.get_study(session, study_b.id) is not None
+        assert len(repo.get_raw_jobs_for_study(session, study_b.id)) == 1

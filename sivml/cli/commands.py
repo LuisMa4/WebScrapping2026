@@ -193,6 +193,31 @@ def studies_list():
         session.close()
 
 
+@studies.command("delete")
+@click.option("--study-id", required=True, help="ID del estudio a eliminar")
+@click.option("--yes", is_flag=True, help="No pedir confirmacion")
+def studies_delete(study_id, yes):
+    """Elimina un estudio y todas sus ofertas (raw y deduplicadas)."""
+    session = SessionLocal()
+    try:
+        study = repo.get_study(session, study_id)
+        if not study:
+            click.echo(f"[ERROR] Estudio {study_id!r} no encontrado.")
+            sys.exit(1)
+
+        if not yes:
+            click.confirm(
+                f"Esto eliminara permanentemente el estudio '{study.name}' "
+                f"({study_id}) y todas sus ofertas. ¿Continuar?",
+                abort=True,
+            )
+
+        repo.delete_study(session, study_id)
+        click.echo(f"[OK] Estudio {study_id!r} eliminado.")
+    finally:
+        session.close()
+
+
 @studies.command("show")
 @click.option("--study-id", required=True)
 def studies_show(study_id):

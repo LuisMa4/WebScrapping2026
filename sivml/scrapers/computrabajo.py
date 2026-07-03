@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 import urllib.parse
 from datetime import datetime
 
@@ -8,6 +9,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import Page
 
 from config.settings import StudyConfig
+from processing.normalizer import parse_relative_date
 from scrapers.base import BaseScraper, ScrapedJob
 
 # URL real validada: https://pe.computrabajo.com/trabajo-de-{slug-con-guiones}
@@ -24,8 +26,12 @@ class ComputrabajoScraper(BaseScraper):
 
     def search(self, keyword: str, city: str) -> list[ScrapedJob]:
         jobs: list[ScrapedJob] = []
+        started_at = time.time()
 
         for page_num in range(1, self.config.scraper.max_pages + 1):
+            if self._time_budget_exceeded(started_at):
+                break
+
             url = self._build_search_url(keyword, city, page_num)
             self.logger.debug(f"Página {page_num}: {url}")
 
@@ -144,6 +150,14 @@ class ComputrabajoScraper(BaseScraper):
             if sal_text:
                 salary_raw = sal_text
 
+        # Fecha de publicacion: <p class="fs13 fc_aux mt15"> "Hace 2 dias" / "Ayer"
+        # (verificado en vivo, julio 2026). Texto relativo -> date real via
+        # parse_relative_date; None si el formato no se reconoce.
+        posted_date = None
+        date_p = art.select_one("p.fs13.fc_aux.mt15")
+        if date_p:
+            posted_date = parse_relative_date(date_p.get_text(strip=True))
+
         return ScrapedJob(
             source_id=source_id,
             portal=self.portal_name,
@@ -154,6 +168,7 @@ class ComputrabajoScraper(BaseScraper):
             city=city,
             country="Perú",
             salary_raw=salary_raw,
+            posted_date=posted_date,
         )
 
     def _parse_detail_page(self, html: str) -> dict[str, str]:

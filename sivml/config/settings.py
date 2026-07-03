@@ -16,6 +16,11 @@ class ScraperConfig:
     max_pages: int = 50
     headless: bool = True
     timeout_ms: int = 30_000
+    # Tiempo maximo (segundos) para UNA busqueda (keyword+ciudad) dentro de un
+    # portal. Portales lentos (LinkedIn, con su anti-bot y contexto fresco por
+    # keyword) pueden tardar minutos por pagina -- pasado este limite se corta
+    # la paginacion y se devuelve lo ya recolectado, en vez de seguir indefinidamente.
+    max_search_seconds: float = 420.0  # 7 minutos
 
 
 @dataclass(frozen=True)
@@ -41,6 +46,7 @@ def load_study_config(path: str | Path) -> StudyConfig:
         max_pages=scraper_raw.get("max_pages", 50),
         headless=scraper_raw.get("headless", True),
         timeout_ms=scraper_raw.get("timeout_ms", 30_000),
+        max_search_seconds=scraper_raw.get("max_search_seconds", 420.0),
     )
 
     return StudyConfig(

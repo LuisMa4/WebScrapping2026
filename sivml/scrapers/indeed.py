@@ -4,7 +4,7 @@ import re
 import time
 import unicodedata
 import urllib.parse
-from datetime import datetime
+from datetime import date, datetime
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import Page
@@ -45,8 +45,12 @@ class IndeedScraper(BaseScraper):
         keyword_norm = _strip_accents(keyword)
         start = 0
         results_per_page = 15
+        started_at = time.time()
 
         for _ in range(self.config.scraper.max_pages):
+            if self._time_budget_exceeded(started_at):
+                break
+
             url = self._build_search_url(keyword, city, start)
             self.logger.debug(f"Indeed offset {start}: {url}")
 
@@ -80,7 +84,13 @@ class IndeedScraper(BaseScraper):
     def _build_search_url(self, keyword: str, city: str, start: int) -> str:
         # Siempre normalizar: Indeed PE no acepta tildes en el query
         keyword_clean = _strip_accents(keyword)
-        params = urllib.parse.urlencode({"q": keyword_clean, "l": city, "start": start})
+        # fromage = dias desde publicacion (parametro nativo de Indeed) --
+        # deriva del date_from del estudio, asi el filtro de fechas del
+        # estudio se aplica del lado del portal en vez de descartar despues.
+        days_ago = max(1, (date.today() - self.config.date_from).days)
+        params = urllib.parse.urlencode({
+            "q": keyword_clean, "l": city, "start": start, "fromage": days_ago,
+        })
         return f"{self.base_url}/jobs?{params}"
 
     def _fetch_html(self, url: str) -> str:

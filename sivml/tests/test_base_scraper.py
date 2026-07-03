@@ -109,6 +109,32 @@ class TestGotoWithRetry:
         assert page.calls == 2  # intento original + 1 reintento, luego se rinde
 
 
+class TestTimeBudget:
+    """
+    Portales lentos (LinkedIn con su anti-bot) pueden tardar minutos por
+    pagina. _time_budget_exceeded() es el corte de seguridad que cada
+    search() de portal consulta entre paginas para no colgarse indefinidamente.
+    """
+
+    def test_not_exceeded_when_just_started(self, cfg):
+        import time
+        from scrapers.computrabajo import ComputrabajoScraper
+        scraper = ComputrabajoScraper(cfg, page=None)
+        assert scraper._time_budget_exceeded(time.time()) is False
+
+    def test_exceeded_when_past_limit(self, cfg):
+        import time
+        from dataclasses import replace
+        from scrapers.computrabajo import ComputrabajoScraper
+        fast_cfg = replace(cfg, scraper=replace(cfg.scraper, max_search_seconds=0.01))
+        scraper = ComputrabajoScraper(fast_cfg, page=None)
+        started = time.time() - 1.0  # hace 1 segundo, ya paso el limite de 0.01s
+        assert scraper._time_budget_exceeded(started) is True
+
+    def test_default_budget_is_seven_minutes(self, cfg):
+        assert cfg.scraper.max_search_seconds == 420.0
+
+
 class TestScraperRegistry:
     def test_all_portals_registered(self):
         from scrapers import REGISTRY

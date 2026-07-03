@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
 from datetime import datetime
 
@@ -8,6 +9,7 @@ from bs4 import BeautifulSoup
 from playwright.sync_api import Page
 
 from config.settings import StudyConfig
+from processing.normalizer import parse_relative_date
 from scrapers.base import BaseScraper, ScrapedJob
 
 # Selectores validados contra HTML real de bumeran.com.pe (junio 2026):
@@ -28,8 +30,12 @@ class BumeranScraper(BaseScraper):
 
     def search(self, keyword: str, city: str) -> list[ScrapedJob]:
         jobs: list[ScrapedJob] = []
+        started_at = time.time()
 
         for page_num in range(1, self.config.scraper.max_pages + 1):
+            if self._time_budget_exceeded(started_at):
+                break
+
             url = self._build_search_url(keyword, city, page_num)
 
             try:
@@ -141,8 +147,10 @@ class BumeranScraper(BaseScraper):
         # Empresa: último h3 dentro del header_div (el primero es la fecha)
         all_h3 = header_div.find_all("h3")
         company = None
+        posted_date = None
         if len(all_h3) >= 2:
             company = all_h3[-1].get_text(strip=True)
+            posted_date = parse_relative_date(all_h3[0].get_text(strip=True))
         elif all_h3:
             company = all_h3[0].get_text(strip=True)
 
@@ -210,6 +218,7 @@ class BumeranScraper(BaseScraper):
             country="Perú",
             salary_raw=salary_raw,
             modality_raw=modality_raw,
+            posted_date=posted_date,
         )
 
     def _parse_detail_page(self, html: str) -> dict[str, str]:

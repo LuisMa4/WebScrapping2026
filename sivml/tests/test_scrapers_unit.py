@@ -295,3 +295,51 @@ class TestLaborumURL:
         s = LaborumScraper(cfg)
         url = s._build_search_url("analista", "Lima", 1)
         assert "page=" not in url
+
+
+class TestSearchRespectsTimeBudget:
+    """
+    Regresion: LinkedIn (y otros portales lentos) podian colgar una busqueda
+    por muchos minutos si un portal devolvia paginas indefinidamente. Cada
+    search() debe cortar la paginacion apenas se supera max_search_seconds,
+    sin necesitar que _fetch_html falle ni que el portal se quede sin
+    resultados.
+    """
+
+    def test_computrabajo_stops_fetching_when_budget_exceeded(self, cfg, monkeypatch):
+        from dataclasses import replace
+        from scrapers.computrabajo import ComputrabajoScraper
+
+        fast_cfg = replace(cfg, scraper=replace(cfg.scraper, max_pages=50, max_search_seconds=-1.0))
+        s = ComputrabajoScraper(fast_cfg, page=object())
+
+        calls = {"n": 0}
+
+        def fake_fetch_html(url):
+            calls["n"] += 1
+            return "<html><article class='box_offer'></article></html>"
+
+        monkeypatch.setattr(s, "_fetch_html", fake_fetch_html)
+        jobs = s.search("analista", "Lima")
+
+        assert calls["n"] == 0, "no deberia llegar a pedir ninguna pagina con presupuesto de tiempo en 0"
+        assert jobs == []
+
+    def test_bumeran_stops_fetching_when_budget_exceeded(self, cfg, monkeypatch):
+        from dataclasses import replace
+        from scrapers.bumeran import BumeranScraper
+
+        fast_cfg = replace(cfg, scraper=replace(cfg.scraper, max_pages=50, max_search_seconds=-1.0))
+        s = BumeranScraper(fast_cfg, page=object())
+
+        calls = {"n": 0}
+
+        def fake_fetch_html(url, wait_selector=None):
+            calls["n"] += 1
+            return "<html></html>"
+
+        monkeypatch.setattr(s, "_fetch_html", fake_fetch_html)
+        jobs = s.search("analista", "Lima")
+
+        assert calls["n"] == 0
+        assert jobs == []
