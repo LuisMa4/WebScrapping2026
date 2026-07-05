@@ -263,6 +263,65 @@ class TestBumeranDetailParsing:
         assert "Buscar empleo por puesto" not in desc
 
 
+class TestLinkedInParsing:
+    """
+    Regresion: LinkedIn nunca seteaba posted_date, por lo que la hoja
+    Tendencia_Temporal del Excel salia vacia en cualquier estudio que
+    incluyera LinkedIn. LinkedIn expone la fecha real en el atributo
+    datetime="YYYY-MM-DD" del <time>, no como texto relativo -- no hace
+    falta parse_relative_date, solo leer el atributo (verificado contra
+    HTML real de linkedin.com/jobs/search, julio 2026).
+    """
+
+    FAKE_CARD_HTML = """
+    <div class="base-card" data-entity-urn="urn:li:jobPosting:12345">
+      <a class="base-card__full-link" href="https://pe.linkedin.com/jobs/view/contador-en-acme-12345?refId=x">
+        <span class="sr-only">Contador</span>
+      </a>
+      <h3 class="base-search-card__title">Contador</h3>
+      <h4 class="base-search-card__subtitle">
+        <a>Acme SAC</a>
+      </h4>
+      <div class="base-search-card__metadata">
+        <span class="job-search-card__location">Lima, Peru</span>
+        <time class="job-search-card__listdate" datetime="2026-06-25">1 week ago</time>
+      </div>
+    </div>
+    """
+
+    def test_extracts_posted_date_from_time_datetime_attr(self, cfg):
+        from datetime import date as date_cls
+        from scrapers.linkedin import LinkedInScraper
+        from bs4 import BeautifulSoup
+        s = LinkedInScraper(cfg)
+        card = BeautifulSoup(self.FAKE_CARD_HTML, "lxml").select_one("div.base-card")
+        job = s._parse_card(card)
+        assert job is not None
+        assert job.posted_date == date_cls(2026, 6, 25)
+
+    def test_missing_time_element_gives_none_posted_date(self, cfg):
+        from scrapers.linkedin import LinkedInScraper
+        from bs4 import BeautifulSoup
+        html_without_date = self.FAKE_CARD_HTML.replace(
+            '<time class="job-search-card__listdate" datetime="2026-06-25">1 week ago</time>', ""
+        )
+        s = LinkedInScraper(cfg)
+        card = BeautifulSoup(html_without_date, "lxml").select_one("div.base-card")
+        job = s._parse_card(card)
+        assert job is not None
+        assert job.posted_date is None
+
+    def test_malformed_datetime_attr_gives_none_instead_of_raising(self, cfg):
+        from scrapers.linkedin import LinkedInScraper
+        from bs4 import BeautifulSoup
+        html_bad_date = self.FAKE_CARD_HTML.replace('datetime="2026-06-25"', 'datetime="not-a-date"')
+        s = LinkedInScraper(cfg)
+        card = BeautifulSoup(html_bad_date, "lxml").select_one("div.base-card")
+        job = s._parse_card(card)
+        assert job is not None
+        assert job.posted_date is None
+
+
 class TestJoobleNoKey:
     def test_returns_empty_without_key(self, cfg, monkeypatch):
         monkeypatch.delenv("JOOBLE_API_KEY", raising=False)

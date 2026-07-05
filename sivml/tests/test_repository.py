@@ -53,6 +53,99 @@ class TestCreateStudy:
         assert updated.status == "completed"
         assert updated.finished_at is not None
 
+    def test_finish_study_failed(self, session, study_config):
+        study = repo.create_study(session, study_config)
+        repo.finish_study(session, study.id, success=False)
+        updated = repo.get_study(session, study.id)
+        assert updated.status == "failed"
+
+    def test_finish_study_marks_stopped_if_stop_was_requested(self, session, study_config):
+        # Boton "Detener" en Mis Estudios: aunque el scraping en curso llame
+        # finish_study(success=True) al terminar su ultimo lote, el estudio
+        # debe quedar "stopped" (no "completed") si el usuario pidio pararlo.
+        study = repo.create_study(session, study_config)
+        repo.request_stop(session, study.id)
+        repo.finish_study(session, study.id, success=True)
+        updated = repo.get_study(session, study.id)
+        assert updated.status == "stopped"
+
+    def test_finish_study_sees_stop_requested_from_a_different_session(self, session, study_config):
+        # Regresion: en la app real, el scraping corre con UNA session
+        # (creada al inicio, con el Study ya cargado en su identity map desde
+        # create_study), mientras el boton "Detener" (en OTRA pestana del
+        # navegador) escribe stop_requested=True con una session DISTINTA.
+        # session.get(Study, id) de la primera session devolvia el objeto
+        # cacheado (stop_requested=False) en vez de leer el valor real de
+        # la BD -- finish_study() marcaba "completed" en vez de "stopped".
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from database.session import Base
+
+        engine = session.get_bind()
+        OtherSession = sessionmaker(bind=engine)
+
+        long_lived_session = session  # ya cargo el Study via create_study, arriba
+        study = repo.create_study(long_lived_session, study_config)
+
+        other_session = OtherSession()
+        try:
+            repo.request_stop(other_session, study.id)  # "boton Detener" en otra sesion/pestana
+        finally:
+            other_session.close()
+
+        # long_lived_session nunca releyo el Study desde que lo creo --
+        # sigue siendo la MISMA session que usaria run_scraping()/finish_study().
+        repo.finish_study(long_lived_session, study.id, success=True)
+        updated = repo.get_study(long_lived_session, study.id)
+        assert updated.status == "stopped"
+
+    def test_finish_study_does_not_raise_if_study_was_deleted_concurrently(self, session, study_config):
+        # Regresion: si el usuario elimina un estudio (boton "Eliminar" en Mis
+        # Estudios, en OTRA pestana/sesion) MIENTRAS el scraping de ese mismo
+        # estudio sigue corriendo, la session larga que ejecuta el scraping
+        # todavia tiene el Study cacheado en su identity map. finish_study()
+        # intentaba hacer UPDATE sobre una fila que ya no existe -> SQLAlchemy
+        # lanzaba StaleDataError ("expected to update 1 row(s), 0 matched"),
+        # que ademas dejaba la session en estado "rolled back" (cualquier uso
+        # posterior de esa session lanzaba PendingRollbackError en cascada).
+        from sqlalchemy.orm import sessionmaker
+
+        engine = session.get_bind()
+        OtherSession = sessionmaker(bind=engine)
+
+        long_lived_session = session
+        study = repo.create_study(long_lived_session, study_config)
+
+        other_session = OtherSession()
+        try:
+            repo.delete_study(other_session, study.id)  # "boton Eliminar" en otra pestana
+        finally:
+            other_session.close()
+
+        # No debe lanzar excepcion pese a que la fila ya no existe.
+        repo.finish_study(long_lived_session, study.id, success=True)
+
+        # La session debe seguir siendo utilizable despues (no debe quedar
+        # en estado "rolled back").
+        assert repo.get_study(long_lived_session, "otro-id-cualquiera") is None
+
+
+class TestRequestStop:
+    def test_new_study_stop_not_requested(self, session, study_config):
+        study = repo.create_study(session, study_config)
+        assert repo.is_stop_requested(session, study.id) is False
+
+    def test_request_stop_sets_flag(self, session, study_config):
+        study = repo.create_study(session, study_config)
+        repo.request_stop(session, study.id)
+        assert repo.is_stop_requested(session, study.id) is True
+
+    def test_request_stop_on_missing_study_does_not_raise(self, session):
+        repo.request_stop(session, "does-not-exist")
+
+    def test_is_stop_requested_on_missing_study_returns_false(self, session):
+        assert repo.is_stop_requested(session, "does-not-exist") is False
+
 
 class TestUpsertRawJob:
     def _make_job(self, url="https://example.com/1"):

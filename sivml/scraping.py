@@ -31,6 +31,22 @@ _UA = (
 _db_lock = threading.Lock()
 
 
+def _stop_requested(study_id: str) -> bool:
+    """
+    Revisa si el usuario pidio detener el estudio (boton "Detener" en Mis
+    Estudios). Usa una session propia, de corta duracion, en vez de la
+    session del thread de scraping: esta corre en un thread separado del
+    que atiende al boton, y una session de larga duracion podria devolver
+    un valor cacheado en vez de leer el cambio hecho por la otra session.
+    """
+    from database.session import SessionLocal
+    s = SessionLocal()
+    try:
+        return repo.is_stop_requested(s, study_id)
+    finally:
+        s.close()
+
+
 def _filter_by_date_range(jobs, cfg):
     """
     Descarta ofertas cuya fecha de publicacion (si se pudo extraer) cae fuera
@@ -245,6 +261,9 @@ def _scrape_portal_fresh_ctx(session, cfg, study_id, dry_run, browser, portal_na
 
     for keyword in cfg.keywords:
         for city in cfg.cities:
+            if _stop_requested(study_id):
+                log(f"    [DETENIDO] {portal_name}: el usuario solicito detener el estudio.")
+                return
             # Nuevo contexto = cookies nuevas = nueva sesion = sin deteccion de bot
             ctx = browser.new_context(user_agent=_UA)
             page = ctx.new_page()
@@ -310,6 +329,9 @@ def _scrape_portal(session, cfg, study_id, dry_run, page, portal_name, log):
 
     for keyword in cfg.keywords:
         for city in cfg.cities:
+            if _stop_requested(study_id):
+                log(f"    [DETENIDO] {portal_name}: el usuario solicito detener el estudio.")
+                return
             with _db_lock:
                 run = repo.start_scraping_run(session, study_id, portal_name, keyword, city)
             found = 0

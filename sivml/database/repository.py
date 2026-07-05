@@ -7,6 +7,7 @@ from typing import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.exc import StaleDataError
 
 from config.settings import StudyConfig
 from database.models import Job, RawJob, ScrapingRun, Study, StudyTemplate
@@ -38,9 +39,51 @@ def create_study(session: Session, config: StudyConfig, config_path: str | None 
 def finish_study(session: Session, study_id: str, success: bool = True) -> None:
     study = session.get(Study, study_id)
     if study:
-        study.finished_at = datetime.utcnow()
-        study.status = "completed" if success else "failed"
+        try:
+            study.finished_at = datetime.utcnow()
+            # No usar study.stop_requested aqui: si esta session ya tenia el
+            # Study cargado en su identity map desde antes (ej. create_study(),
+            # al inicio de una corrida larga), session.get() devuelve el objeto
+            # CACHEADO sin releerlo -- y no veria un stop_requested=True escrito
+            # por otra session/pestana (el boton "Detener" corre en una session
+            # de Streamlit distinta a la que ejecuta el scraping). is_stop_requested()
+            # hace un select de solo esa columna, que si siempre lee el valor
+            # actual de la BD.
+            if is_stop_requested(session, study_id):
+                study.status = "stopped"
+            else:
+                study.status = "completed" if success else "failed"
+            session.commit()
+        except StaleDataError:
+            # El estudio fue eliminado (boton "Eliminar" en otra pestana)
+            # mientras esta session -- que lo trae cacheado en su identity
+            # map desde create_study() -- todavia estaba corriendo el
+            # scraping. Ya no hay nada que actualizar. El autoflush de
+            # is_stop_requested() (un select dispara flush de cambios
+            # pendientes) puede ser el que dispare esto, no solo el commit
+            # final -- por eso el try envuelve todo el bloque, no solo el
+            # commit. Sin este rollback la session queda en estado "rolled
+            # back" y cualquier uso posterior (incluido el except Exception
+            # de _run_new_study) revienta con PendingRollbackError en cascada.
+            session.rollback()
+
+
+def request_stop(session: Session, study_id: str) -> None:
+    """
+    Marca un estudio 'running' para que se detenga en la proxima
+    oportunidad segura (entre una busqueda keyword/ciudad y la siguiente).
+    El scraping corre en threads separados del hilo que atiende al boton
+    "Detener", asi que esto solo escribe una bandera en la BD -- el propio
+    loop de scraping (scraping.py) es quien la revisa periodicamente.
+    """
+    study = session.get(Study, study_id)
+    if study:
+        study.stop_requested = True
         session.commit()
+
+
+def is_stop_requested(session: Session, study_id: str) -> bool:
+    return bool(session.scalar(select(Study.stop_requested).where(Study.id == study_id)))
 
 
 def list_studies(session: Session) -> Sequence[Study]:

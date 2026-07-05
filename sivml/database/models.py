@@ -28,7 +28,8 @@ class Study(Base):
     config_yaml: Mapped[str | None] = mapped_column(Text)  # snapshot completo del YAML
     started_at: Mapped[datetime | None] = mapped_column(DateTime)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime)
-    status: Mapped[str] = mapped_column(String(20), default="running")  # running|completed|failed
+    status: Mapped[str] = mapped_column(String(20), default="running")  # running|completed|failed|stopped
+    stop_requested: Mapped[bool] = mapped_column(Boolean, default=False)
 
     raw_jobs: Mapped[list[RawJob]] = relationship("RawJob", back_populates="study")
     jobs: Mapped[list[Job]] = relationship("Job", back_populates="study")

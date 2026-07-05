@@ -78,11 +78,31 @@ PAGES = {
     "Estado Portales": "portales",
 }
 
+from dashboard.page_state import resolve_page_index
+
 st.sidebar.title("SIVML")
 st.sidebar.caption("Sistema Inteligente de Vigilancia del Mercado Laboral")
 st.sidebar.divider()
-page_label = st.sidebar.radio("Navegacion", list(PAGES.keys()), label_visibility="collapsed")
+
+_NAV_KEY = "sivml_nav_page_label"
+if _NAV_KEY not in st.session_state:
+    # Solo se ejecuta la PRIMERA vez que esta sesion renderiza el radio (justo
+    # tras cargar la pagina/F5): siembra el valor inicial desde ?page=... de
+    # la URL para que un refresh conserve la pagina actual en vez de volver
+    # siempre a "Nuevo Estudio". Pasar index=... recalculado en cada rerun (en
+    # vez de sembrar session_state una sola vez) rompe el radio: sin un key
+    # fijo, Streamlit trata el widget como si cambiara de identidad en cada
+    # rerun y se come uno de cada dos clicks de navegacion (reproducido con
+    # Playwright: cada click alterno no actualizaba la pagina).
+    idx = resolve_page_index(PAGES, st.query_params.get("page"))
+    st.session_state[_NAV_KEY] = list(PAGES.keys())[idx]
+
+page_label = st.sidebar.radio(
+    "Navegacion", list(PAGES.keys()), key=_NAV_KEY, label_visibility="collapsed"
+)
 page = PAGES[page_label]
+if st.query_params.get("page") != page:
+    st.query_params["page"] = page
 st.sidebar.divider()
 st.sidebar.caption("v1.0 - Peru")
 
@@ -92,7 +112,7 @@ CITIES_PE = [
 ]
 MAX_KEYWORDS = 5  # cada keyword adicional puede sumar varios minutos por ciudad/portal
 from scrapers.portal_info import ACTIVE_PORTALS, INACTIVE_PORTALS
-from dashboard.template_cards import template_summary
+from dashboard.template_cards import template_summary, valid_defaults
 ALL_PORTALS = ACTIVE_PORTALS  # laborum y jooble excluidos (0 resultados validados)
 
 # ---------------------------------------------------------------------------
@@ -169,14 +189,22 @@ def page_nuevo_estudio():
 
     from scrapers.portal_info import PORTAL_STATUS, RECOMMENDED_PORTALS
     from database import repository as repo
+    from dashboard.page_state import load_draft, save_draft, clear_draft
 
     # ── Tarjetas de plantillas guardadas (visibles de inmediato, sin expander) ─
     session_pre = _session()
     templates = repo.list_templates(session_pre)
     session_pre.close()
 
+    # Borrador en disco: sobrevive a un refresh (F5) del navegador, que crea
+    # una sesion de Streamlit nueva y por lo tanto vacia st.session_state.
+    draft_path = ROOT / ".sivml_draft_nuevo_estudio.json"
+
     # Valores iniciales (se sobreescriben si se carga una plantilla)
-    defaults = st.session_state.get("form_defaults", {})
+    if "form_defaults" in st.session_state:
+        defaults = st.session_state["form_defaults"]
+    else:
+        defaults = load_draft(draft_path)
 
     st.session_state.setdefault("dismissed_template_ids", set())
     visible_templates = [
@@ -256,11 +284,11 @@ def page_nuevo_estudio():
         with col2:
             cities = st.multiselect(
                 "Ciudades *", CITIES_PE,
-                default=defaults.get("cities", list(CITIES_PE)),
+                default=valid_defaults(defaults.get("cities", list(CITIES_PE)), CITIES_PE),
             )
             portals = st.multiselect(
                 "Portales *", ALL_PORTALS,
-                default=defaults.get("portals", ["computrabajo", "bumeran"]),
+                default=valid_defaults(defaults.get("portals", ["computrabajo", "bumeran"]), ALL_PORTALS),
                 help="Computrabajo + Bumeran es la combinacion mas estable.",
             )
             col_d1, col_d2 = st.columns(2)
@@ -308,6 +336,22 @@ def page_nuevo_estudio():
                 )
 
         submitted = st.form_submit_button("Crear estudio y ejecutar scraping", type="primary", use_container_width=True)
+
+    # Autoguardar el progreso del formulario en disco en cada rerun (aunque no
+    # se haya presionado "Crear estudio"), para que un refresh (F5) -- que
+    # crea una sesion de Streamlit nueva y vacia st.session_state -- pueda
+    # recuperarlo en vez de mostrar el formulario en blanco.
+    save_draft(draft_path, {
+        "study_name": study_name,
+        "academic_program": academic_program,
+        "keywords_raw": keywords_raw,
+        "cities": cities,
+        "portals": portals,
+        "max_pages": int(max_pages),
+        "delay_min": delay_min,
+        "delay_max": delay_max,
+        "headless": headless,
+    })
 
     if submitted:
         errors = []
@@ -358,8 +402,9 @@ def page_nuevo_estudio():
                 sess_tpl.close()
                 st.success(f"Plantilla **{tpl_name_input.strip()}** guardada.")
 
-            # Limpiar defaults de session_state al lanzar
+            # Limpiar defaults de session_state y el borrador en disco al lanzar
             st.session_state.pop("form_defaults", None)
+            clear_draft(draft_path)
 
             _run_new_study(
                 study_name=study_name.strip(),
@@ -416,25 +461,50 @@ def _run_new_study(**params):
         log_lines.append(msg)
         log_box.markdown("\n\n".join(log_lines))
 
+    study_id = None
     try:
         study = repo.create_study(session, cfg)
-        log(f"Estudio creado. ID: `{study.id}`")
+        # Guardado aparte del objeto ORM: si otra pestana elimina el estudio
+        # mientras este sigue corriendo, el objeto `study` queda "expired" tras
+        # el rollback defensivo de finish_study(), y volver a leer study.id en
+        # ese punto dispara un refresh por PK que lanza ObjectDeletedError (en
+        # vez de simplemente devolver el string que ya teniamos). Usar siempre
+        # study_id (un str plano, no ligado a la session) evita ese problema.
+        study_id = study.id
+        log(f"Estudio creado. ID: `{study_id}`")
+
+        # Si el usuario refresca (F5) mientras el scraping sigue corriendo en
+        # esta sesion, que la nueva sesion aterrice en "Mis Estudios" (donde
+        # el fragment con auto-refresh muestra el estado real) en vez de un
+        # formulario "Nuevo Estudio" en blanco que no dice nada del progreso.
+        # NOTA: solo se actualiza la URL (query_params), no el session_state
+        # del radio -- el widget de navegacion ya fue instanciado mas arriba
+        # en este mismo script run, y Streamlit lanza StreamlitAPIException si
+        # se reasigna el session_state de un widget ya instanciado en el
+        # mismo run (reproducido: dejaba el estudio en status='failed' al
+        # instante). La URL igual queda correcta para cuando el usuario
+        # refresque (F5) de verdad, que es el caso que importa aqui.
+        st.query_params["page"] = "mis_estudios"
 
         log("---")
         log("Ejecutando scraping...")
 
         with st.spinner("Scraping en progreso (puede tardar varios minutos)..."):
-            _run_scraping(session, cfg, study.id, dry_run=dry_run)
+            _run_scraping(session, cfg, study_id, dry_run=dry_run)
 
-        repo.finish_study(session, study.id, success=True)
+        was_stopped = repo.is_stop_requested(session, study_id)
+        repo.finish_study(session, study_id, success=True)
 
         from database.models import ScrapingRun
         from sqlalchemy import select
-        runs = session.scalars(select(ScrapingRun).where(ScrapingRun.study_id == study.id)).all()
-        raw_total = len(repo.get_raw_jobs_for_study(session, study.id))
+        runs = session.scalars(select(ScrapingRun).where(ScrapingRun.study_id == study_id)).all()
+        raw_total = len(repo.get_raw_jobs_for_study(session, study_id))
 
         log("---")
-        log(f"Scraping completado: {raw_total} ofertas recolectadas {'(dry run)' if dry_run else ''}")
+        if was_stopped:
+            log(f"Scraping detenido por el usuario: {raw_total} ofertas recolectadas hasta el momento")
+        else:
+            log(f"Scraping completado: {raw_total} ofertas recolectadas {'(dry run)' if dry_run else ''}")
 
         # Tabla de resultados por portal
         st.subheader("Resultados por portal")
@@ -481,7 +551,7 @@ def _run_new_study(**params):
         # Procesamiento automatico
         st.subheader("Procesamiento automatico")
         with st.spinner("Normalizando y deduplicando..."):
-            stats = run_exact_dedup(session, study.id)
+            stats = run_exact_dedup(session, study_id)
 
         jobs_count = stats["jobs_created"]
         st.success(
@@ -501,20 +571,31 @@ def _run_new_study(**params):
             output_dir = ROOT / "output"
             output_dir.mkdir(exist_ok=True)
             with st.spinner("Generando Excel..."):
-                filepath = export_study_to_excel(session, study.id, output_dir=output_dir)
+                filepath = export_study_to_excel(session, study_id, output_dir=output_dir)
 
             file_size_kb = filepath.stat().st_size // 1024
             if filepath.exists() and file_size_kb > 0:
                 st.success(f"Excel generado: `{filepath.name}` ({file_size_kb} KB)")
-                with open(filepath, "rb") as f:
-                    st.download_button(
-                        label="Descargar Excel",
-                        data=f,
-                        file_name=filepath.name,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        type="primary",
-                        use_container_width=True,
-                    )
+                file_bytes = filepath.read_bytes()
+                st.download_button(
+                    label="Descargar Excel",
+                    data=file_bytes,
+                    file_name=filepath.name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary",
+                    use_container_width=True,
+                )
+                # Descarga automatica: señal inequivoca de que el estudio
+                # culmino, sin depender de que el usuario note el boton de
+                # arriba. Se dispara una sola vez por estudio.
+                from dashboard.auto_download import build_auto_download_html
+                st.components.v1.html(
+                    build_auto_download_html(
+                        file_bytes, filepath.name,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    ),
+                    height=0, width=0,
+                )
                 with st.expander("Contenido del Excel (8 hojas)"):
                     st.markdown(
                         "| Hoja | Contenido |\n|---|---|\n"
@@ -530,12 +611,17 @@ def _run_new_study(**params):
             else:
                 st.error(f"El Excel se genero pero parece vacio ({file_size_kb} KB).")
 
-        st.balloons()
-        st.success("Estudio completado. Ve a Resultados para explorar los datos.")
+        if was_stopped:
+            st.warning("Estudio detenido por el usuario. Los datos recolectados hasta el momento se guardaron y estan disponibles en Resultados.")
+        else:
+            st.balloons()
+            st.success("Estudio completado. Ve a Resultados para explorar los datos.")
 
     except Exception as exc:
         import traceback
-        repo.finish_study(session, study.id, success=False)
+        session.rollback()  # limpiar cualquier transaccion fallida antes de reusar la session
+        if study_id is not None:
+            repo.finish_study(session, study_id, success=False)
         st.error(f"Error durante el scraping: {exc}")
         with st.expander("Ver traceback completo"):
             st.code(traceback.format_exc())
@@ -547,7 +633,13 @@ def _run_new_study(**params):
 # PAGINA 2: Mis Estudios
 # ---------------------------------------------------------------------------
 
+@st.fragment(run_every=5)
 def page_mis_estudios():
+    # Fragment con auto-refresh: sin esto, una pestana con "Mis Estudios"
+    # abierta nunca se enterla de que un estudio cambio de estado (running ->
+    # completed/stopped) en OTRA pestana/sesion, porque Streamlit solo
+    # re-ejecuta el script ante una interaccion del usuario. Re-consulta la
+    # BD cada 5s y solo redibuja este fragmento (no toda la pagina).
     st.title("Mis Estudios")
     session = _session()
     try:
@@ -567,7 +659,7 @@ def page_mis_estudios():
         for study in studies:
             raw_count = len(repo.get_raw_jobs_for_study(session, study.id))
             jobs_count = len(repo.get_jobs_for_study(session, study.id))
-            icon = {"running": "En progreso", "completed": "Completado", "failed": "Fallido"}.get(study.status, study.status)
+            icon = {"running": "En progreso", "completed": "Completado", "failed": "Fallido", "stopped": "Detenido"}.get(study.status, study.status)
             fecha = study.started_at.strftime("%Y-%m-%d %H:%M") if study.started_at else "-"
 
             with st.expander(f"[{icon}] {study.name} - {fecha}"):
@@ -598,6 +690,25 @@ def page_mis_estudios():
                                     reason="Marcado como fallido: sin actividad por mas de 15 minutos (proceso interrumpido)",
                                 )
                                 st.success("Estudio marcado como fallido.")
+                                st.rerun()
+                            else:
+                                st.error("Marca la casilla de confirmacion primero.")
+
+                    if study.stop_requested:
+                        st.info(
+                            "Detencion solicitada -- se detendra apenas termine la busqueda "
+                            "keyword/ciudad que este en curso en este momento."
+                        )
+                    else:
+                        stop_key = f"confirm_stop_{study.id}"
+                        st.checkbox("Confirmo que quiero detener este estudio", key=stop_key)
+                        if st.button("Detener", key=f"stop_{study.id}"):
+                            if st.session_state.get(stop_key):
+                                repo.request_stop(session, study.id)
+                                st.success(
+                                    "Detencion solicitada. Los datos ya recolectados no se pierden; "
+                                    "el estudio se detendra en cuanto termine la busqueda en curso."
+                                )
                                 st.rerun()
                             else:
                                 st.error("Marca la casilla de confirmacion primero.")
@@ -781,8 +892,8 @@ def page_mis_plantillas():
                         e_name = st.text_input("Nombre", value=tpl.name)
                         e_prog = st.text_input("Programa academico", value=tpl.academic_program)
                         e_kw   = st.text_area(f"Keywords (una por linea, maximo {MAX_KEYWORDS})", value="\n".join(tpl.keywords), height=100)
-                        e_city = st.multiselect("Ciudades", CITIES_PE, default=tpl.cities)
-                        e_port = st.multiselect("Portales", ALL_PORTALS, default=tpl.portals)
+                        e_city = st.multiselect("Ciudades", CITIES_PE, default=valid_defaults(tpl.cities, CITIES_PE))
+                        e_port = st.multiselect("Portales", ALL_PORTALS, default=valid_defaults(tpl.portals, ALL_PORTALS))
                         e_notes = st.text_input("Notas (opcional)", value=tpl.notes or "")
                         e_pages = st.number_input("Max paginas", min_value=1, max_value=100, value=tpl.max_pages)
 

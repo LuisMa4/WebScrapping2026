@@ -32,3 +32,25 @@ def get_session():
 def init_db() -> None:
     from database import models  # noqa: F401 — registra los modelos en Base.metadata
     Base.metadata.create_all(bind=engine)
+    _run_lightweight_migrations(engine)
+
+
+def _run_lightweight_migrations(bind=None) -> None:
+    """
+    Base.metadata.create_all() solo crea tablas NUEVAS -- nunca agrega
+    columnas a una tabla que ya existe. Si el modelo gana una columna nueva
+    (ej. Study.stop_requested) y el usuario ya tiene un sivml.db real con
+    estudios guardados, create_all() la ignoraria silenciosamente. Esto
+    agrega columnas faltantes con ALTER TABLE, sin tocar filas existentes.
+    """
+    from sqlalchemy import inspect, text
+
+    target = bind or engine
+    inspector = inspect(target)
+    if "studies" not in inspector.get_table_names():
+        return
+
+    existing_cols = {c["name"] for c in inspector.get_columns("studies")}
+    if "stop_requested" not in existing_cols:
+        with target.begin() as conn:
+            conn.execute(text("ALTER TABLE studies ADD COLUMN stop_requested BOOLEAN DEFAULT 0"))

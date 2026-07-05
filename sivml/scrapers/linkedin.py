@@ -139,6 +139,17 @@ class LinkedInScraper(BaseScraper):
         company_el = card.select_one("h4.base-search-card__subtitle a, span.job-card-container__company-name")
         city_el = card.select_one("span.job-search-card__location, span.job-card-container__metadata-item")
 
+        # Fecha de publicacion: LinkedIn la expone directo en el atributo
+        # datetime="YYYY-MM-DD" del <time> (verificado en vivo, julio 2026),
+        # asi que no hace falta parsear texto relativo como en otros portales.
+        posted_date = None
+        time_el = card.select_one("time.job-search-card__listdate, time.job-search-card__listdate--new")
+        if time_el and time_el.get("datetime"):
+            try:
+                posted_date = date.fromisoformat(time_el["datetime"])
+            except ValueError:
+                posted_date = None
+
         return ScrapedJob(
             source_id=source_id,
             portal=self.portal_name,
@@ -148,6 +159,7 @@ class LinkedInScraper(BaseScraper):
             company=company_el.get_text(strip=True) if company_el else None,
             city=city_el.get_text(strip=True) if city_el else None,
             country="Perú",
+            posted_date=posted_date,
         )
 
     def _parse_detail_page(self, html: str) -> dict[str, str]:
