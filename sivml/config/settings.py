@@ -36,6 +36,54 @@ class StudyConfig:
     scraper: ScraperConfig = field(default_factory=ScraperConfig)
 
 
+def study_config_to_dict(cfg: StudyConfig) -> dict[str, Any]:
+    """
+    Serializa un StudyConfig a un dict JSON-compatible. Usado para guardar
+    la configuracion completa de un estudio en cola (Study.config_yaml) y
+    poder reconstruirla al promoverlo, potencialmente en otro hilo/momento.
+    """
+    return {
+        "study_name": cfg.study_name,
+        "keywords": cfg.keywords,
+        "cities": cfg.cities,
+        "portals": cfg.portals,
+        "date_from": cfg.date_from.isoformat(),
+        "date_to": cfg.date_to.isoformat(),
+        "academic_program": cfg.academic_program,
+        "study_id": cfg.study_id,
+        "scraper": {
+            "delay_range": list(cfg.scraper.delay_range),
+            "max_retries": cfg.scraper.max_retries,
+            "max_pages": cfg.scraper.max_pages,
+            "headless": cfg.scraper.headless,
+            "timeout_ms": cfg.scraper.timeout_ms,
+            "max_search_seconds": cfg.scraper.max_search_seconds,
+        },
+    }
+
+
+def study_config_from_dict(data: dict[str, Any]) -> StudyConfig:
+    scraper_raw = data.get("scraper", {})
+    return StudyConfig(
+        study_name=data["study_name"],
+        keywords=data["keywords"],
+        cities=data["cities"],
+        portals=data["portals"],
+        date_from=date.fromisoformat(data["date_from"]),
+        date_to=date.fromisoformat(data["date_to"]),
+        academic_program=data["academic_program"],
+        study_id=data["study_id"],
+        scraper=ScraperConfig(
+            delay_range=tuple(scraper_raw.get("delay_range", [2.0, 5.0])),
+            max_retries=scraper_raw.get("max_retries", 3),
+            max_pages=scraper_raw.get("max_pages", 50),
+            headless=scraper_raw.get("headless", True),
+            timeout_ms=scraper_raw.get("timeout_ms", 30_000),
+            max_search_seconds=scraper_raw.get("max_search_seconds", 420.0),
+        ),
+    )
+
+
 def load_study_config(path: str | Path) -> StudyConfig:
     raw: dict[str, Any] = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
 

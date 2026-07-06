@@ -10,7 +10,11 @@ _DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///sivml.db")
 
 engine = create_engine(
     _DATABASE_URL,
-    connect_args={"check_same_thread": False} if _DATABASE_URL.startswith("sqlite") else {},
+    # timeout=30: con varios estudios corriendo a la vez (cada uno con sus
+    # propios hilos por portal), SQLite serializa escrituras a nivel de
+    # archivo -- sin esto, un escritor concurrente puede toparse con
+    # "database is locked" en vez de esperar su turno unos segundos.
+    connect_args={"check_same_thread": False, "timeout": 30} if _DATABASE_URL.startswith("sqlite") else {},
     echo=False,
 )
 

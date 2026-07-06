@@ -305,6 +305,101 @@ class TestIsStudyStale:
         now = study.started_at + timedelta(minutes=20)
         assert repo.is_study_stale(study, last_activity=None, threshold_minutes=15, now=now) is True
 
+    def test_queued_study_with_old_started_at_is_stale(self, session, study_config):
+        # Un estudio en cola nunca llego a arrancar (ej. el dashboard se
+        # reinicio antes de promoverlo) -- debe poder marcarse tambien.
+        from datetime import timedelta
+        study = repo.create_study(session, study_config, status="queued")
+        now = study.started_at + timedelta(minutes=20)
+        assert repo.is_study_stale(study, last_activity=None, threshold_minutes=15, now=now) is True
+
+    def test_queued_study_recent_not_stale(self, session, study_config):
+        study = repo.create_study(session, study_config, status="queued")
+        now = datetime.utcnow()
+        assert repo.is_study_stale(study, last_activity=None, threshold_minutes=15, now=now) is False
+
+
+class TestConcurrentStudies:
+    """
+    Soporte para varios estudios corriendo a la vez (limite maximo) con cola
+    automatica: si ya hay cupo lleno, el estudio nuevo queda 'queued' hasta
+    que se libera un cupo.
+    """
+
+    def test_create_study_default_status_is_running(self, session, study_config):
+        study = repo.create_study(session, study_config)
+        assert study.status == "running"
+
+    def test_create_study_can_be_queued(self, session, study_config):
+        study = repo.create_study(session, study_config, status="queued")
+        assert study.status == "queued"
+
+    def test_count_running_studies_empty(self, session):
+        assert repo.count_running_studies(session) == 0
+
+    def test_count_running_studies_counts_only_running(self, session, study_config):
+        from dataclasses import replace
+        repo.create_study(session, study_config)  # running
+        repo.create_study(session, replace(study_config, study_id="s2"), status="queued")
+        s3 = repo.create_study(session, replace(study_config, study_id="s3"))
+        repo.finish_study(session, s3.id, success=True)  # completed
+        assert repo.count_running_studies(session) == 1
+
+    def test_next_queued_study_none_when_empty(self, session):
+        assert repo.next_queued_study(session) is None
+
+    def test_next_queued_study_returns_oldest_first(self, session, study_config):
+        from dataclasses import replace
+        import time
+        s1 = repo.create_study(session, replace(study_config, study_id="s1"), status="queued")
+        time.sleep(0.01)
+        repo.create_study(session, replace(study_config, study_id="s2"), status="queued")
+        oldest = repo.next_queued_study(session)
+        assert oldest.id == s1.id
+
+    def test_next_queued_study_ignores_running_studies(self, session, study_config):
+        repo.create_study(session, study_config)  # running, no queued
+        assert repo.next_queued_study(session) is None
+
+    def test_claim_queued_study_succeeds_and_flips_to_running(self, session, study_config):
+        study = repo.create_study(session, study_config, status="queued")
+        claimed = repo.claim_queued_study(session, study.id)
+        assert claimed is True
+        updated = repo.get_study(session, study.id)
+        assert updated.status == "running"
+
+    def test_claim_queued_study_twice_only_succeeds_once(self, session, study_config):
+        # Simula la condicion de carrera: dos hilos terminando casi al mismo
+        # tiempo, ambos intentando promover el mismo estudio en cola.
+        study = repo.create_study(session, study_config, status="queued")
+        first = repo.claim_queued_study(session, study.id)
+        second = repo.claim_queued_study(session, study.id)
+        assert first is True
+        assert second is False
+
+    def test_claim_queued_study_fails_for_already_running_study(self, session, study_config):
+        study = repo.create_study(session, study_config)  # ya 'running'
+        assert repo.claim_queued_study(session, study.id) is False
+
+    def test_claim_queued_study_fails_for_missing_study(self, session):
+        assert repo.claim_queued_study(session, "does-not-exist") is False
+
+    def test_get_study_config_roundtrips_config_and_dry_run_flag(self, session, study_config):
+        study = repo.create_study(session, study_config, dry_run=True)
+        result = repo.get_study_config(session, study.id)
+        assert result is not None
+        cfg, dry_run = result
+        assert cfg == study_config
+        assert dry_run is True
+
+    def test_get_study_config_defaults_dry_run_false(self, session, study_config):
+        study = repo.create_study(session, study_config)
+        _, dry_run = repo.get_study_config(session, study.id)
+        assert dry_run is False
+
+    def test_get_study_config_missing_study_returns_none(self, session):
+        assert repo.get_study_config(session, "does-not-exist") is None
+
 
 class TestMarkStudyFailed:
     def test_marks_study_and_running_runs_as_failed(self, session, study_config):

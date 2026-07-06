@@ -1,4 +1,4 @@
-﻿"""
+"""
 SIVML - Dashboard
 Ejecutar desde sivml/: python -m streamlit run dashboard/app.py
 """
@@ -310,7 +310,12 @@ def page_nuevo_estudio():
                         st.caption(info.get("nota", "")[:100])
 
         st.divider()
-        with st.expander("Opciones avanzadas", expanded=False):
+        # key fijo: sin el, el expander pierde su estado abierto/cerrado tras
+        # cada envio del formulario (reproducido en vivo: al enviar varios
+        # estudios seguidos, "Opciones avanzadas" -- y por lo tanto el
+        # checkbox de Dry run que vive adentro -- se colapsaba solo en cada
+        # envio siguiente, obligando a volver a abrirlo cada vez).
+        with st.expander("Opciones avanzadas", expanded=False, key="nuevo_estudio_adv_expander"):
             c3, c4, c5 = st.columns(3)
             with c3:
                 max_pages = st.number_input("Max paginas/busqueda", min_value=1, max_value=100,
@@ -406,7 +411,7 @@ def page_nuevo_estudio():
             st.session_state.pop("form_defaults", None)
             clear_draft(draft_path)
 
-            _run_new_study(
+            _launch_study(
                 study_name=study_name.strip(),
                 academic_program=academic_program.strip(),
                 keywords=keywords,
@@ -421,12 +426,15 @@ def page_nuevo_estudio():
             )
 
 
-def _run_new_study(**params):
+def _launch_study(**params) -> None:
+    """
+    Crea el StudyConfig y lo entrega a study_runner: arranca en segundo
+    plano de inmediato si hay cupo, o queda 'en cola' si ya hay
+    MAX_CONCURRENT_STUDIES corriendo (se arranca solo cuando se libera un
+    cupo). No bloquea la pantalla -- el progreso se sigue en "Mis Estudios".
+    """
     from config.settings import StudyConfig, ScraperConfig
-    from database import repository as repo
-    from scraping import run_scraping as _run_scraping
-    from processing.deduplicator import run_exact_dedup
-    from exports.excel_exporter import export_study_to_excel
+    from study_runner import start_or_queue_study, MAX_CONCURRENT_STUDIES
 
     cfg = StudyConfig(
         study_name=params["study_name"],
@@ -442,349 +450,348 @@ def _run_new_study(**params):
             headless=params["headless"],
         ),
     )
-    dry_run = params["dry_run"]
     session = _session()
-
-    if dry_run:
-        st.warning(
-            "Modo Dry Run activo: solo se recopilan datos del listado. "
-            "Las descripciones, modalidad, experiencia y educacion NO se descargaran. "
-            "Util para validar la busqueda antes de una ejecucion completa."
-        )
-    else:
-        st.info(f"Study ID: `{cfg.study_id}`")
-
-    log_box = st.empty()
-    log_lines: list[str] = []
-
-    def log(msg: str):
-        log_lines.append(msg)
-        log_box.markdown("\n\n".join(log_lines))
-
-    study_id = None
     try:
-        study = repo.create_study(session, cfg)
-        # Guardado aparte del objeto ORM: si otra pestana elimina el estudio
-        # mientras este sigue corriendo, el objeto `study` queda "expired" tras
-        # el rollback defensivo de finish_study(), y volver a leer study.id en
-        # ese punto dispara un refresh por PK que lanza ObjectDeletedError (en
-        # vez de simplemente devolver el string que ya teniamos). Usar siempre
-        # study_id (un str plano, no ligado a la session) evita ese problema.
-        study_id = study.id
-        log(f"Estudio creado. ID: `{study_id}`")
-
-        # Si el usuario refresca (F5) mientras el scraping sigue corriendo en
-        # esta sesion, que la nueva sesion aterrice en "Mis Estudios" (donde
-        # el fragment con auto-refresh muestra el estado real) en vez de un
-        # formulario "Nuevo Estudio" en blanco que no dice nada del progreso.
-        # NOTA: solo se actualiza la URL (query_params), no el session_state
-        # del radio -- el widget de navegacion ya fue instanciado mas arriba
-        # en este mismo script run, y Streamlit lanza StreamlitAPIException si
-        # se reasigna el session_state de un widget ya instanciado en el
-        # mismo run (reproducido: dejaba el estudio en status='failed' al
-        # instante). La URL igual queda correcta para cuando el usuario
-        # refresque (F5) de verdad, que es el caso que importa aqui.
-        st.query_params["page"] = "mis_estudios"
-
-        log("---")
-        log("Ejecutando scraping...")
-
-        with st.spinner("Scraping en progreso (puede tardar varios minutos)..."):
-            _run_scraping(session, cfg, study_id, dry_run=dry_run)
-
-        was_stopped = repo.is_stop_requested(session, study_id)
-        repo.finish_study(session, study_id, success=True)
-
-        from database.models import ScrapingRun
-        from sqlalchemy import select
-        runs = session.scalars(select(ScrapingRun).where(ScrapingRun.study_id == study_id)).all()
-        raw_total = len(repo.get_raw_jobs_for_study(session, study_id))
-
-        log("---")
-        if was_stopped:
-            log(f"Scraping detenido por el usuario: {raw_total} ofertas recolectadas hasta el momento")
-        else:
-            log(f"Scraping completado: {raw_total} ofertas recolectadas {'(dry run)' if dry_run else ''}")
-
-        # Tabla de resultados por portal
-        st.subheader("Resultados por portal")
-        import pandas as pd
-        from scrapers.portal_info import PORTAL_STATUS as PS
-
-        run_data = [{
-            "Portal":      r.portal,
-            "Keyword":     r.keyword or "-",
-            "Ciudad":      r.city or "-",
-            "Encontradas": r.records_found,
-            "Nuevas":      r.records_new,
-            "Estado":      r.status,
-            "Error":       r.error_message or "",
-        } for r in runs]
-        df_runs = pd.DataFrame(run_data) if run_data else pd.DataFrame()
-
-        if not df_runs.empty:
-            summary = (
-                df_runs.groupby("Portal")
-                .agg(Encontradas=("Encontradas", "sum"), Nuevas=("Nuevas", "sum"),
-                     Errores=("Error", lambda x: (x != "").sum()))
-                .reset_index()
-            )
-            st.dataframe(summary, hide_index=True, use_container_width=True)
-
-            # Alertas por portal con 0 resultados
-            for _, row in summary.iterrows():
-                p = row["Portal"]
-                if row["Encontradas"] == 0:
-                    info = PS.get(p, {})
-                    st.warning(f"{p}: 0 resultados. Estado: {info.get('status','?')}. {info.get('nota','')}")
-
-            # Errores individuales
-            df_errors = df_runs[df_runs["Error"] != ""]
-            if not df_errors.empty:
-                with st.expander(f"{len(df_errors)} busquedas con error"):
-                    st.dataframe(df_errors[["Portal", "Keyword", "Ciudad", "Error"]], hide_index=True, use_container_width=True)
-
-        if raw_total == 0:
-            st.error("No se recolectaron ofertas. Verifica el estado de los portales y ajusta keywords o ciudades.")
-            return
-
-        # Procesamiento automatico
-        st.subheader("Procesamiento automatico")
-        with st.spinner("Normalizando y deduplicando..."):
-            stats = run_exact_dedup(session, study_id)
-
-        jobs_count = stats["jobs_created"]
-        st.success(
-            f"{jobs_count} ofertas unicas | "
-            f"{stats['duplicates_marked']} duplicados eliminados"
-        )
-
-        if dry_run:
+        study = start_or_queue_study(session, cfg, dry_run=params["dry_run"])
+        if study.status == "queued":
             st.info(
-                "Dry run: las descripciones no fueron descargadas. "
-                "Ejecuta sin dry run para obtener el estudio completo."
+                f"Ya hay {MAX_CONCURRENT_STUDIES} estudios corriendo. "
+                f"**{study.name}** quedo en cola y arrancara automaticamente "
+                f"en cuanto se libere un cupo. Sigue su progreso en **Mis Estudios**."
             )
-
-        # Exportacion Excel automatica
-        if jobs_count > 0:
-            st.subheader("Exportar a Excel")
-            output_dir = ROOT / "output"
-            output_dir.mkdir(exist_ok=True)
-            with st.spinner("Generando Excel..."):
-                filepath = export_study_to_excel(session, study_id, output_dir=output_dir)
-
-            file_size_kb = filepath.stat().st_size // 1024
-            if filepath.exists() and file_size_kb > 0:
-                st.success(f"Excel generado: `{filepath.name}` ({file_size_kb} KB)")
-                file_bytes = filepath.read_bytes()
-                st.download_button(
-                    label="Descargar Excel",
-                    data=file_bytes,
-                    file_name=filepath.name,
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary",
-                    use_container_width=True,
-                )
-                # Descarga automatica: señal inequivoca de que el estudio
-                # culmino, sin depender de que el usuario note el boton de
-                # arriba. Se dispara una sola vez por estudio.
-                from dashboard.auto_download import build_auto_download_html
-                st.components.v1.html(
-                    build_auto_download_html(
-                        file_bytes, filepath.name,
-                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    ),
-                    height=0, width=0,
-                )
-                with st.expander("Contenido del Excel (8 hojas)"):
-                    st.markdown(
-                        "| Hoja | Contenido |\n|---|---|\n"
-                        "| **Resumen** | Metricas globales + breakdown por portal |\n"
-                        "| **Vacantes** | Todas las ofertas normalizadas (con columna Portal y URL) |\n"
-                        "| **Vacantes_Raw** | Datos crudos antes del procesamiento |\n"
-                        "| **Por_Portal** | Conteo de vacantes por portal de origen |\n"
-                        "| **Por_Ciudad** | Vacantes y salario promedio por ciudad |\n"
-                        "| **Por_Empresa** | Top 50 empresas por volumen |\n"
-                        "| **Tendencia_Temporal** | Vacantes agrupadas por mes |\n"
-                        "| **Log_Scraping** | Log tecnico de cada busqueda ejecutada |\n"
-                    )
-            else:
-                st.error(f"El Excel se genero pero parece vacio ({file_size_kb} KB).")
-
-        if was_stopped:
-            st.warning("Estudio detenido por el usuario. Los datos recolectados hasta el momento se guardaron y estan disponibles en Resultados.")
         else:
-            st.balloons()
-            st.success("Estudio completado. Ve a Resultados para explorar los datos.")
-
-    except Exception as exc:
-        import traceback
-        session.rollback()  # limpiar cualquier transaccion fallida antes de reusar la session
-        if study_id is not None:
-            repo.finish_study(session, study_id, success=False)
-        st.error(f"Error durante el scraping: {exc}")
-        with st.expander("Ver traceback completo"):
-            st.code(traceback.format_exc())
+            st.success(
+                f"Estudio **{study.name}** iniciado en segundo plano. "
+                f"Sigue su progreso en **Mis Estudios**."
+            )
     finally:
         session.close()
+    # Deja la URL lista para cuando el usuario navegue a Mis Estudios (o
+    # refresque): no fuerza la navegacion en esta misma sesion (el radio del
+    # sidebar ya fue instanciado en este script run; reasignar su
+    # session_state aqui lanzaria StreamlitAPIException).
+    st.query_params["page"] = "mis_estudios"
 
 
 # ---------------------------------------------------------------------------
 # PAGINA 2: Mis Estudios
 # ---------------------------------------------------------------------------
 
+def _find_latest_excel(study_id: str):
+    output_dir = ROOT / "output"
+    matches = sorted(output_dir.glob(f"SIVML_{study_id[:8]}_*.xlsx"))
+    return matches[-1] if matches else None
+
+
+def _render_pending_auto_downloads() -> None:
+    """
+    Banner destacado + boton de descarga para estudios que acaban de
+    terminar (detectados por el fragment de Mis Estudios, que solo guarda el
+    pendiente en session_state -- ver el comentario en page_mis_estudios).
+
+    NOTA: un <script> que dispara un click programatico (sin interaccion
+    real del usuario) para descargar un archivo NO funciona de forma
+    confiable -- los navegadores modernos bloquean silenciosamente las
+    descargas que no se originan en un gesto real del usuario (verificado en
+    vivo: el anchor con el archivo en base64 SI llegaba al DOM, pero el
+    evento de descarga nunca se disparaba). Como el estudio ahora corre en
+    segundo plano y termina sin que el usuario haga click en nada en ese
+    instante, ninguna descarga "silenciosa" es posible en ningun navegador.
+    En su lugar: un banner dificil de ignorar con un st.download_button real
+    (un click genuino del usuario, que si es un gesto valido) -- la senal
+    de que termino sigue siendo inmediata y visible, solo requiere un click.
+
+    El pendiente NO se limpia hasta que el usuario descarga o descarta el
+    banner explicitamente: esta funcion solo se re-ejecuta en un rerun
+    COMPLETO (no en cada tick de 5s del fragment, que es fragment-scoped y
+    no toca codigo de afuera) -- si se limpiara apenas se dibuja una vez,
+    el banner podia desaparecer con el siguiente rerun completo (ej. el
+    usuario hace click en cualquier otra cosa) sin que el usuario alcanzara
+    a verlo o descargarlo.
+    """
+    pending = st.session_state.get("_pending_auto_dl")
+    if not pending:
+        return
+
+    from database import repository as repo
+    session = _session()
+    try:
+        for sid in list(pending):
+            study = repo.get_study(session, sid)
+            name = study.name if study else sid[:8]
+            filepath = _find_latest_excel(sid)
+            with st.container(border=True):
+                st.success(f"**Estudio completado: {name}**")
+                bcol1, bcol2 = st.columns([4, 1])
+                with bcol1:
+                    if filepath and filepath.exists():
+                        clicked = st.download_button(
+                            label=f"Descargar Excel ({filepath.stat().st_size // 1024} KB)",
+                            data=filepath.read_bytes(),
+                            file_name=filepath.name,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary",
+                            key=f"auto_dl_btn_{sid}",
+                        )
+                        if clicked:
+                            st.session_state["_pending_auto_dl"].discard(sid)
+                            st.session_state[f"_auto_dl_done_{sid}"] = True
+                    else:
+                        st.caption("Sin ofertas para exportar (0 resultados o descartadas por duplicado).")
+                with bcol2:
+                    if st.button("Descartar", key=f"dismiss_auto_dl_{sid}"):
+                        st.session_state["_pending_auto_dl"].discard(sid)
+                        st.session_state[f"_auto_dl_done_{sid}"] = True
+                        st.rerun()
+    finally:
+        session.close()
+
+
+def _render_study_body(session, study):
+    """Cuerpo comun (metricas, aviso de estancado/detener, tabla de busquedas,
+    acciones) para un estudio -- usado tanto en las pestanas 'En curso' como
+    en el Historial."""
+    from database import repository as repo
+    from processing.deduplicator import run_exact_dedup, run_fuzzy_dedup
+    from exports.excel_exporter import export_study_to_excel
+    from database.models import ScrapingRun
+    from sqlalchemy import select
+    import pandas as pd
+    from scrapers.portal_info import PORTAL_STATUS as PS
+
+    raw_count = len(repo.get_raw_jobs_for_study(session, study.id))
+    jobs_count = len(repo.get_jobs_for_study(session, study.id))
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Scrapeadas", raw_count)
+    m2.metric("Unicas (dedup)", jobs_count)
+    m3.metric("Estado", study.status)
+    m4.metric("Programa", (study.academic_program or "-")[:18])
+    st.caption(f"ID: `{study.id}`")
+
+    if study.status == "running":
+        last_activity = repo.get_last_activity(session, study.id)
+        if repo.is_study_stale(study, last_activity, threshold_minutes=15):
+            ref = last_activity or study.started_at
+            st.warning(
+                f"Este estudio dice \"En progreso\" pero no ha tenido actividad desde "
+                f"{ref.strftime('%Y-%m-%d %H:%M')} (mas de 15 minutos). "
+                f"Probablemente el proceso de scraping murio a mitad de camino "
+                f"(cierre inesperado, conflicto de puertos, etc.). Los datos ya "
+                f"recolectados ({raw_count} ofertas) no se pierden."
+            )
+            stale_key = f"confirm_stale_{study.id}"
+            st.checkbox("Confirmo que quiero marcar este estudio como fallido", key=stale_key)
+            if st.button("Marcar como fallido", key=f"mark_failed_{study.id}"):
+                if st.session_state.get(stale_key):
+                    repo.mark_study_failed(
+                        session, study.id,
+                        reason="Marcado como fallido: sin actividad por mas de 15 minutos (proceso interrumpido)",
+                    )
+                    st.success("Estudio marcado como fallido.")
+                    st.rerun()
+                else:
+                    st.error("Marca la casilla de confirmacion primero.")
+
+        if study.stop_requested:
+            st.info(
+                "Detencion solicitada -- se detendra apenas termine la busqueda "
+                "keyword/ciudad que este en curso en este momento."
+            )
+        else:
+            stop_key = f"confirm_stop_{study.id}"
+            st.checkbox("Confirmo que quiero detener este estudio", key=stop_key)
+            if st.button("Detener", key=f"stop_{study.id}"):
+                if st.session_state.get(stop_key):
+                    repo.request_stop(session, study.id)
+                    st.success(
+                        "Detencion solicitada. Los datos ya recolectados no se pierden; "
+                        "el estudio se detendra en cuanto termine la busqueda en curso."
+                    )
+                    st.rerun()
+                else:
+                    st.error("Marca la casilla de confirmacion primero.")
+
+    runs = session.scalars(select(ScrapingRun).where(ScrapingRun.study_id == study.id)).all()
+    if runs:
+        run_df = pd.DataFrame([{
+            "Portal":   r.portal,
+            "Keyword":  r.keyword,
+            "Ciudad":   r.city,
+            "Halladas": r.records_found,
+            "Nuevas":   r.records_new,
+            "Estado":   r.status,
+            "Error":    r.error_message or "",
+        } for r in runs])
+
+        errors_count = int((run_df["Error"] != "").sum())
+        zero_count = int((run_df["Halladas"] == 0).sum())
+        ok_count = int((run_df["Estado"] == "completed").sum())
+
+        c_ok, c_warn, c_err = st.columns(3)
+        c_ok.metric("Busquedas OK", ok_count)
+        c_warn.metric("Con 0 resultados", zero_count)
+        c_err.metric("Con error", errors_count)
+
+        if errors_count > 0 or zero_count > 0:
+            with st.expander(f"Ver problemas ({errors_count} errores, {zero_count} vacias)"):
+                prob = run_df[(run_df["Error"] != "") | (run_df["Halladas"] == 0)].copy()
+                def _diag(row):
+                    if row["Error"]:
+                        return row["Error"][:100]
+                    info = PS.get(row["Portal"], {})
+                    return info.get("nota", "Sin resultados")[:100]
+                prob["Diagnostico"] = prob.apply(_diag, axis=1)
+                st.dataframe(prob[["Portal", "Keyword", "Ciudad", "Halladas", "Diagnostico"]], hide_index=True, use_container_width=True)
+
+    st.divider()
+    b1, b2, b3, b4 = st.columns(4)
+    with b1:
+        if st.button("Procesar", key=f"proc_{study.id}", use_container_width=True):
+            with st.spinner("Procesando..."):
+                s1 = run_exact_dedup(session, study.id)
+                s2 = run_fuzzy_dedup(session, study.id)
+            st.success(f"{s1['jobs_created']} jobs unicos | {s1['duplicates_marked']} duplicados | {s2['merged']} fusionados")
+            st.rerun()
+    with b2:
+        if st.button("Exportar Excel", key=f"exp_{study.id}", use_container_width=True):
+            output_dir = ROOT / "output"
+            with st.spinner("Generando Excel..."):
+                filepath = export_study_to_excel(session, study.id, output_dir=output_dir)
+            kb = filepath.stat().st_size // 1024
+            if kb > 0:
+                with open(filepath, "rb") as f:
+                    st.download_button(
+                        label=f"Descargar ({kb} KB)",
+                        data=f,
+                        file_name=filepath.name,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"dl_{study.id}",
+                    )
+            else:
+                st.error(f"Excel vacio ({kb} KB). Procesa el estudio primero.")
+    with b3:
+        if st.button("Ver Resultados", key=f"view_{study.id}", use_container_width=True):
+            st.session_state["selected_study_id"] = study.id
+            st.info("Ve a la pestana Resultados.")
+    with b4:
+        del_key = f"confirm_del_{study.id}"
+        st.checkbox("Confirmar", key=del_key, help="Marca esta casilla y luego presiona Eliminar.")
+        if st.button("Eliminar", key=f"del_{study.id}", use_container_width=True):
+            if st.session_state.get(del_key):
+                repo.delete_study(session, study.id)
+                st.success(f"Estudio '{study.name}' eliminado.")
+                st.rerun()
+            else:
+                st.error("Marca la casilla de confirmacion primero.")
+
+
 @st.fragment(run_every=5)
 def page_mis_estudios():
     # Fragment con auto-refresh: sin esto, una pestana con "Mis Estudios"
-    # abierta nunca se enterla de que un estudio cambio de estado (running ->
-    # completed/stopped) en OTRA pestana/sesion, porque Streamlit solo
-    # re-ejecuta el script ante una interaccion del usuario. Re-consulta la
-    # BD cada 5s y solo redibuja este fragmento (no toda la pagina).
+    # abierta nunca se enteraria de que un estudio cambio de estado (running
+    # -> completed/stopped, o queued -> running) en OTRA pestana/sesion,
+    # porque Streamlit solo re-ejecuta el script ante una interaccion del
+    # usuario. Re-consulta la BD cada 5s y solo redibuja este fragmento.
+    from database import repository as repo
+    from study_runner import MAX_CONCURRENT_STUDIES
+
     st.title("Mis Estudios")
     session = _session()
     try:
-        from database import repository as repo
-        from processing.deduplicator import run_exact_dedup, run_fuzzy_dedup
-        from exports.excel_exporter import export_study_to_excel
-        from database.models import ScrapingRun
-        from sqlalchemy import select
-        import pandas as pd
-        from scrapers.portal_info import PORTAL_STATUS as PS
-
         studies = repo.list_studies(session)
         if not studies:
             st.info("No hay estudios. Ve a Nuevo Estudio para crear uno.")
             return
 
-        for study in studies:
-            raw_count = len(repo.get_raw_jobs_for_study(session, study.id))
-            jobs_count = len(repo.get_jobs_for_study(session, study.id))
-            icon = {"running": "En progreso", "completed": "Completado", "failed": "Fallido", "stopped": "Detenido"}.get(study.status, study.status)
+        running = [s for s in studies if s.status == "running"]
+        queued = [s for s in studies if s.status == "queued"]
+        history = [s for s in studies if s.status not in ("running", "queued")]
+
+        # ── Deteccion de estudios recien terminados (para auto-descarga) ────
+        # Un estudio corre en un hilo de fondo que ya genero el Excel antes de
+        # que esta pestana note el cambio de estado -- comparamos contra la
+        # ultima vez que este fragment reviso, para disparar la descarga
+        # automatica exactamente una vez por estudio y por sesion.
+        st.session_state.setdefault("_seen_running_ids", set())
+        st.session_state.setdefault("_pending_auto_dl", set())
+        current_running_ids = {s.id for s in running}
+        just_finished_ids = st.session_state["_seen_running_ids"] - current_running_ids
+        st.session_state["_seen_running_ids"] = current_running_ids
+
+        new_pending = False
+        for sid in just_finished_ids:
+            if not st.session_state.get(f"_auto_dl_done_{sid}"):
+                st.session_state["_pending_auto_dl"].add(sid)
+                new_pending = True
+
+        if new_pending:
+            # st.components.v1.html() (usado por la descarga automatica) no
+            # se ejecuta de forma confiable en el navegador cuando se llama
+            # DENTRO del arbol de un fragment -- verificado en vivo: pese a
+            # forzar un rerun de scope='app' desde aca (que si vuelve a
+            # ejecutar dashboard/app.py entero, confirmado con logs), el
+            # iframe nunca llegaba al DOM real. _render_pending_auto_downloads()
+            # se llama FUERA de este fragment (ver el dispatcher de paginas
+            # mas abajo) -- ahi si funciona. Este rerun solo sirve para darle
+            # a esa funcion la oportunidad de correr con el pendiente ya
+            # guardado en session_state.
+            st.rerun(scope="app")
+
+        # ── Seccion: En curso (pestanas) + En cola (lista compacta) ─────────
+        if running or queued:
+            header = f"En curso: {len(running)}/{MAX_CONCURRENT_STUDIES} corriendo"
+            if queued:
+                header += f", {len(queued)} en cola"
+            st.subheader(header)
+
+            if queued:
+                # key fijo (no basado en el label, que cambia con len(queued)):
+                # sin esto, el expander pierde su identidad -- y por lo tanto
+                # su estado abierto/cerrado -- cada vez que cambia la cantidad
+                # de estudios en cola, colapsandose solo apenas se agrega o
+                # quita uno (reproducido en vivo con Playwright).
+                with st.expander(f"Estudios en cola ({len(queued)})", expanded=False, key="queued_expander"):
+                    for i, q in enumerate(queued, start=1):
+                        qc1, qc2 = st.columns([5, 1])
+                        is_stale_q = repo.is_study_stale(q, None, threshold_minutes=15)
+                        with qc1:
+                            st.markdown(f"**#{i}** {q.name}")
+                            if q.stop_requested:
+                                st.caption("Cancelado -- se marcara como detenido en cuanto se libere un cupo.")
+                            elif is_stale_q:
+                                st.warning(
+                                    "Lleva mas de 15 minutos en cola sin arrancar -- probablemente "
+                                    "el dashboard se reinicio antes de poder promoverlo."
+                                )
+                        with qc2:
+                            if not q.stop_requested:
+                                if st.button("Cancelar", key=f"cancel_q_{q.id}", use_container_width=True):
+                                    repo.request_stop(session, q.id)
+                                    st.rerun()
+                            if is_stale_q:
+                                if st.button("Marcar como fallido", key=f"fail_q_{q.id}", use_container_width=True):
+                                    repo.mark_study_failed(
+                                        session, q.id,
+                                        reason="Marcado como fallido: mas de 15 minutos en cola sin arrancar",
+                                    )
+                                    st.rerun()
+
+            if running:
+                tabs = st.tabs([s.name[:30] or s.id[:8] for s in running])
+                for tab, study in zip(tabs, running):
+                    with tab:
+                        _render_study_body(session, study)
+
+        # ── Historial ────────────────────────────────────────────────────────
+        st.subheader("Historial")
+        if not history:
+            st.caption("Todavia no hay estudios finalizados.")
+        for study in history:
+            icon = {"completed": "Completado", "failed": "Fallido", "stopped": "Detenido"}.get(study.status, study.status)
             fecha = study.started_at.strftime("%Y-%m-%d %H:%M") if study.started_at else "-"
-
             with st.expander(f"[{icon}] {study.name} - {fecha}"):
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Scrapeadas", raw_count)
-                m2.metric("Unicas (dedup)", jobs_count)
-                m3.metric("Estado", study.status)
-                m4.metric("Programa", (study.academic_program or "-")[:18])
-                st.caption(f"ID: `{study.id}`")
-
-                if study.status == "running":
-                    last_activity = repo.get_last_activity(session, study.id)
-                    if repo.is_study_stale(study, last_activity, threshold_minutes=15):
-                        ref = last_activity or study.started_at
-                        st.warning(
-                            f"Este estudio dice \"En progreso\" pero no ha tenido actividad desde "
-                            f"{ref.strftime('%Y-%m-%d %H:%M')} (mas de 15 minutos). "
-                            f"Probablemente el proceso de scraping murio a mitad de camino "
-                            f"(cierre inesperado, conflicto de puertos, etc.). Los datos ya "
-                            f"recolectados ({raw_count} ofertas) no se pierden."
-                        )
-                        stale_key = f"confirm_stale_{study.id}"
-                        st.checkbox("Confirmo que quiero marcar este estudio como fallido", key=stale_key)
-                        if st.button("Marcar como fallido", key=f"mark_failed_{study.id}"):
-                            if st.session_state.get(stale_key):
-                                repo.mark_study_failed(
-                                    session, study.id,
-                                    reason="Marcado como fallido: sin actividad por mas de 15 minutos (proceso interrumpido)",
-                                )
-                                st.success("Estudio marcado como fallido.")
-                                st.rerun()
-                            else:
-                                st.error("Marca la casilla de confirmacion primero.")
-
-                    if study.stop_requested:
-                        st.info(
-                            "Detencion solicitada -- se detendra apenas termine la busqueda "
-                            "keyword/ciudad que este en curso en este momento."
-                        )
-                    else:
-                        stop_key = f"confirm_stop_{study.id}"
-                        st.checkbox("Confirmo que quiero detener este estudio", key=stop_key)
-                        if st.button("Detener", key=f"stop_{study.id}"):
-                            if st.session_state.get(stop_key):
-                                repo.request_stop(session, study.id)
-                                st.success(
-                                    "Detencion solicitada. Los datos ya recolectados no se pierden; "
-                                    "el estudio se detendra en cuanto termine la busqueda en curso."
-                                )
-                                st.rerun()
-                            else:
-                                st.error("Marca la casilla de confirmacion primero.")
-
-                runs = session.scalars(select(ScrapingRun).where(ScrapingRun.study_id == study.id)).all()
-                if runs:
-                    run_df = pd.DataFrame([{
-                        "Portal":   r.portal,
-                        "Keyword":  r.keyword,
-                        "Ciudad":   r.city,
-                        "Halladas": r.records_found,
-                        "Nuevas":   r.records_new,
-                        "Estado":   r.status,
-                        "Error":    r.error_message or "",
-                    } for r in runs])
-
-                    errors_count = int((run_df["Error"] != "").sum())
-                    zero_count = int((run_df["Halladas"] == 0).sum())
-                    ok_count = int((run_df["Estado"] == "completed").sum())
-
-                    c_ok, c_warn, c_err = st.columns(3)
-                    c_ok.metric("Busquedas OK", ok_count)
-                    c_warn.metric("Con 0 resultados", zero_count)
-                    c_err.metric("Con error", errors_count)
-
-                    if errors_count > 0 or zero_count > 0:
-                        with st.expander(f"Ver problemas ({errors_count} errores, {zero_count} vacias)"):
-                            prob = run_df[(run_df["Error"] != "") | (run_df["Halladas"] == 0)].copy()
-                            def _diag(row):
-                                if row["Error"]:
-                                    return row["Error"][:100]
-                                info = PS.get(row["Portal"], {})
-                                return info.get("nota", "Sin resultados")[:100]
-                            prob["Diagnostico"] = prob.apply(_diag, axis=1)
-                            st.dataframe(prob[["Portal", "Keyword", "Ciudad", "Halladas", "Diagnostico"]], hide_index=True, use_container_width=True)
-
-                st.divider()
-                b1, b2, b3, b4 = st.columns(4)
-                with b1:
-                    if st.button("Procesar", key=f"proc_{study.id}", use_container_width=True):
-                        with st.spinner("Procesando..."):
-                            s1 = run_exact_dedup(session, study.id)
-                            s2 = run_fuzzy_dedup(session, study.id)
-                        st.success(f"{s1['jobs_created']} jobs unicos | {s1['duplicates_marked']} duplicados | {s2['merged']} fusionados")
-                        st.rerun()
-                with b2:
-                    if st.button("Exportar Excel", key=f"exp_{study.id}", use_container_width=True):
-                        output_dir = ROOT / "output"
-                        with st.spinner("Generando Excel..."):
-                            filepath = export_study_to_excel(session, study.id, output_dir=output_dir)
-                        kb = filepath.stat().st_size // 1024
-                        if kb > 0:
-                            with open(filepath, "rb") as f:
-                                st.download_button(
-                                    label=f"Descargar ({kb} KB)",
-                                    data=f,
-                                    file_name=filepath.name,
-                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                    key=f"dl_{study.id}",
-                                )
-                        else:
-                            st.error(f"Excel vacio ({kb} KB). Procesa el estudio primero.")
-                with b3:
-                    if st.button("Ver Resultados", key=f"view_{study.id}", use_container_width=True):
-                        st.session_state["selected_study_id"] = study.id
-                        st.info("Ve a la pestana Resultados.")
-                with b4:
-                    del_key = f"confirm_del_{study.id}"
-                    st.checkbox("Confirmar", key=del_key, help="Marca esta casilla y luego presiona Eliminar.")
-                    if st.button("Eliminar", key=f"del_{study.id}", use_container_width=True):
-                        if st.session_state.get(del_key):
-                            repo.delete_study(session, study.id)
-                            st.success(f"Estudio '{study.name}' eliminado.")
-                            st.rerun()
-                        else:
-                            st.error("Marca la casilla de confirmacion primero.")
+                _render_study_body(session, study)
     finally:
         session.close()
 
@@ -872,7 +879,7 @@ def page_mis_plantillas():
                             st.error("La fecha 'Desde' no puede ser posterior a 'Hasta'.")
                             st.stop()
                         repo.mark_template_used(session, tpl.id)
-                        _run_new_study(
+                        _launch_study(
                             study_name=f"{tpl.name} ({run_date_from} / {run_date_to})",
                             academic_program=tpl.academic_program,
                             keywords=tpl.keywords,
@@ -1081,6 +1088,7 @@ def page_resultados():
 if page == "nuevo_estudio":
     page_nuevo_estudio()
 elif page == "mis_estudios":
+    _render_pending_auto_downloads()
     page_mis_estudios()
 elif page == "resultados":
     page_resultados()

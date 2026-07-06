@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import json
 import yaml
 from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 
-from config.settings import StudyConfig
+from config.settings import StudyConfig, study_config_from_dict, study_config_to_dict
 from database.models import Job, RawJob, ScrapingRun, Study, StudyTemplate
 from scrapers.base import ScrapedJob
 
@@ -18,10 +19,21 @@ from scrapers.base import ScrapedJob
 # Studies
 # ---------------------------------------------------------------------------
 
-def create_study(session: Session, config: StudyConfig, config_path: str | None = None) -> Study:
-    config_yaml = None
+def create_study(
+    session: Session,
+    config: StudyConfig,
+    config_path: str | None = None,
+    status: str = "running",
+    dry_run: bool = False,
+) -> Study:
     if config_path:
         config_yaml = Path(config_path).read_text(encoding="utf-8")
+    else:
+        # Snapshot JSON de la config completa (no solo YAML de archivo): un
+        # estudio 'queued' puede promoverse minutos/horas despues en OTRO
+        # hilo, que necesita reconstruir el StudyConfig exacto con el que
+        # se creo -- ver get_study_config().
+        config_yaml = json.dumps({"config": study_config_to_dict(config), "dry_run": dry_run})
 
     study = Study(
         id=config.study_id,
@@ -29,11 +41,57 @@ def create_study(session: Session, config: StudyConfig, config_path: str | None 
         academic_program=config.academic_program,
         config_yaml=config_yaml,
         started_at=datetime.utcnow(),
-        status="running",
+        status=status,
     )
     session.add(study)
     session.commit()
     return study
+
+
+def count_running_studies(session: Session) -> int:
+    return session.scalar(
+        select(func.count()).select_from(Study).where(Study.status == "running")
+    ) or 0
+
+
+def next_queued_study(session: Session) -> Study | None:
+    return session.scalars(
+        select(Study).where(Study.status == "queued").order_by(Study.started_at)
+    ).first()
+
+
+def claim_queued_study(session: Session, study_id: str) -> bool:
+    """
+    Intenta pasar un estudio de 'queued' a 'running' de forma atomica.
+    Devuelve False si el estudio ya no esta en 'queued' (otro hilo lo
+    reclamo primero, o no existe) -- evita que dos hilos que terminan casi
+    al mismo tiempo arranquen el mismo estudio en cola por duplicado.
+    """
+    result = session.execute(
+        update(Study)
+        .where(Study.id == study_id, Study.status == "queued")
+        .values(status="running", started_at=datetime.utcnow())
+    )
+    session.commit()
+    return result.rowcount == 1
+
+
+def get_study_config(session: Session, study_id: str) -> tuple[StudyConfig, bool] | None:
+    """
+    Reconstruye el StudyConfig (y el flag dry_run) guardado por create_study().
+    Devuelve None si el estudio no existe o su config_yaml no tiene el
+    formato JSON esperado (ej. estudios creados por el CLI con config_path,
+    que guardan el YAML crudo del archivo en vez del snapshot JSON).
+    """
+    study = session.get(Study, study_id)
+    if not study or not study.config_yaml:
+        return None
+    try:
+        data = json.loads(study.config_yaml)
+        cfg = study_config_from_dict(data["config"])
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
+    return cfg, bool(data.get("dry_run", False))
 
 
 def finish_study(session: Session, study_id: str, success: bool = True) -> None:
@@ -112,13 +170,15 @@ def is_study_stale(
     now: datetime | None = None,
 ) -> bool:
     """
-    True si el estudio sigue en estado 'running' pero no ha habido
+    True si el estudio sigue 'running' o 'queued' pero no ha habido
     actividad (ninguna scraping_run iniciada o terminada) en los ultimos
-    `threshold_minutes`. Detecta estudios "atascados" cuando el proceso de
-    scraping murio a mitad de camino (crash, conflicto de puertos, reinicio
-    de Streamlit) sin dejar el estudio marcado como fallido.
+    `threshold_minutes`. Detecta estudios "atascados": 'running' cuando el
+    proceso de scraping murio a mitad de camino (crash, conflicto de
+    puertos, reinicio de Streamlit); 'queued' cuando el dashboard se
+    reinicio antes de promoverlo (el hilo que lo habria arrancado ya no
+    existe, se queda en cola para siempre sin este chequeo).
     """
-    if study.status != "running":
+    if study.status not in ("running", "queued"):
         return False
     now = now or datetime.utcnow()
     reference = last_activity or study.started_at
