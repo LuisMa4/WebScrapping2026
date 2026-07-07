@@ -17,10 +17,17 @@ import streamlit as st
 
 st.set_page_config(
     page_title="SIVML - Vigilancia del Mercado Laboral",
-    page_icon="chart_with_upwards_trend",
+    page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    # "auto" (no "expanded"): en pantallas angostas Streamlit colapsa el
+    # sidebar solo -- forzarlo "expanded" lo dejaba tapando toda la pantalla
+    # en mobile, sin espacio para el contenido principal (visto en vivo con
+    # Playwright a 420px de ancho).
+    initial_sidebar_state="auto",
 )
+
+from dashboard.theme import inject_global_css, badge_html, status_emoji, STATUS_META
+inject_global_css(st)
 
 # ---------------------------------------------------------------------------
 # Bootstrap DB
@@ -50,32 +57,16 @@ def _session():
     from database.session import SessionLocal
     return SessionLocal()
 
-def _badge(status: str) -> str:
-    return {
-        "OPERACIONAL":    "OK",
-        "PARCIAL":        "PARCIAL",
-        "REQUIERE_API":   "API KEY",
-        "NO_OPERACIONAL": "BLOQUEADO",
-    }.get(status, "?")
-
-def _badge_color(status: str) -> str:
-    return {
-        "OPERACIONAL":    "green",
-        "PARCIAL":        "orange",
-        "REQUIERE_API":   "red",
-        "NO_OPERACIONAL": "red",
-    }.get(status, "gray")
-
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
 
 PAGES = {
-    "Nuevo Estudio":   "nuevo_estudio",
-    "Mis Plantillas":  "mis_plantillas",
-    "Mis Estudios":    "mis_estudios",
-    "Resultados":      "resultados",
-    "Estado Portales": "portales",
+    "📝 Nuevo Estudio":   "nuevo_estudio",
+    "🗂️ Mis Plantillas":  "mis_plantillas",
+    "📁 Mis Estudios":    "mis_estudios",
+    "📊 Resultados":      "resultados",
+    "🌐 Estado Portales": "portales",
 }
 
 from dashboard.page_state import resolve_page_index
@@ -127,30 +118,29 @@ def page_portales():
         PORTAL_STATUS, PORTAL_CAPABILITIES, RECOMMENDED_PORTALS, SAFE_COMBINATIONS
     )
 
-    # Tabla resumen
-    import pandas as pd
-    rows = []
-    for portal, info in PORTAL_STATUS.items():
+    # Tarjetas resumen -- una por portal, con badge de color en vez del texto
+    # plano de antes (OPERACIONAL/PARCIAL/NO_OPERACIONAL sin distincion visual).
+    # Tambien evita el problema de una tabla de 7 columnas que se cortaba a la
+    # derecha en pantallas normales (visto en vivo, ~1440px de ancho).
+    portals = list(PORTAL_STATUS.keys())
+    cols = st.columns(min(len(portals), 4))
+    for i, portal in enumerate(portals):
+        info = PORTAL_STATUS[portal]
         cap = PORTAL_CAPABILITIES.get(portal, {})
-        rows.append({
-            "Portal":           portal,
-            "Estado":           info["status"],
-            "Uso Simultaneo":   "Si" if cap.get("uso_simultaneo") else "No",
-            "Max Keywords":     cap.get("max_keywords", "N/A"),
-            "Anti-Bot":         cap.get("anti_bot", "N/A"),
-            "Delay Recomendado": cap.get("delay_recomendado", "N/A"),
-            "Recomendado":      "Recomendado" if portal in RECOMMENDED_PORTALS else "",
-        })
-    df = pd.DataFrame(rows)
-    st.dataframe(df, hide_index=True, use_container_width=True)
+        with cols[i % 4]:
+            with st.container(border=True):
+                star = " ⭐" if portal in RECOMMENDED_PORTALS else ""
+                st.markdown(f"**{portal}**{star}")
+                st.markdown(badge_html(info["status"]), unsafe_allow_html=True)
+                st.caption(f"Max keywords: {cap.get('max_keywords', 'N/A')}")
 
     st.divider()
 
     # Combinaciones seguras
     st.subheader("Combinaciones seguras para uso simultaneo")
     st.info(
-        "Solo estos grupos de portales pueden ejecutarse en la misma sesion sin interferencia. "
-        "LinkedIn e Indeed deben usarse siempre solos."
+        "Gracias al contexto de navegador fresco por keyword+ciudad, los 4 portales "
+        "activos se pueden combinar entre si sin interferencia -- incluidos Indeed y LinkedIn."
     )
     for combo in SAFE_COMBINATIONS:
         st.markdown(f"- `{' + '.join(combo)}`")
@@ -164,7 +154,8 @@ def page_portales():
         rec = " - Recomendado" if portal in RECOMMENDED_PORTALS else ""
         cap = PORTAL_CAPABILITIES.get(portal, {})
 
-        with st.expander(f"**{portal.upper()}** [{_badge(status)}]{rec}"):
+        status_label = STATUS_META.get(status, (status,))[0]
+        with st.expander(f"**{portal.upper()}** — {status_label}{rec}"):
             col1, col2 = st.columns(2)
             with col1:
                 st.markdown(f"**Estado:** `{status}`")
@@ -305,7 +296,7 @@ def page_nuevo_estudio():
                 info = PORTAL_STATUS.get(p, {})
                 s = info.get("status", "")
                 with cols[i % 4]:
-                    st.markdown(f"`{p}` **[{_badge(s)}]**")
+                    st.markdown(f"`{p}` {badge_html(s)}", unsafe_allow_html=True)
                     if s != "OPERACIONAL":
                         st.caption(info.get("nota", "")[:100])
 
@@ -565,7 +556,13 @@ def _render_study_body(session, study):
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Scrapeadas", raw_count)
     m2.metric("Unicas (dedup)", jobs_count)
-    m3.metric("Estado", study.status)
+    with m3:
+        st.markdown(
+            '<div style="font-size:0.72rem; text-transform:uppercase; '
+            'letter-spacing:0.04em; opacity:0.75; margin-bottom:6px;">Estado</div>'
+            + badge_html(study.status),
+            unsafe_allow_html=True,
+        )
     m4.metric("Programa", (study.academic_program or "-")[:18])
     st.caption(f"ID: `{study.id}`")
 
@@ -601,7 +598,8 @@ def _render_study_body(session, study):
         else:
             stop_key = f"confirm_stop_{study.id}"
             st.checkbox("Confirmo que quiero detener este estudio", key=stop_key)
-            if st.button("Detener", key=f"stop_{study.id}"):
+            stop_zone = st.container(key=f"danger_zone_stop_{study.id}")
+            if stop_zone.button("Detener", key=f"stop_{study.id}"):
                 if st.session_state.get(stop_key):
                     repo.request_stop(session, study.id)
                     st.success(
@@ -677,7 +675,8 @@ def _render_study_body(session, study):
     with b4:
         del_key = f"confirm_del_{study.id}"
         st.checkbox("Confirmar", key=del_key, help="Marca esta casilla y luego presiona Eliminar.")
-        if st.button("Eliminar", key=f"del_{study.id}", use_container_width=True):
+        del_zone = st.container(key=f"danger_zone_study_{study.id}")
+        if del_zone.button("Eliminar", key=f"del_{study.id}", use_container_width=True):
             if st.session_state.get(del_key):
                 repo.delete_study(session, study.id)
                 st.success(f"Estudio '{study.name}' eliminado.")
@@ -778,7 +777,7 @@ def page_mis_estudios():
                                     st.rerun()
 
             if running:
-                tabs = st.tabs([s.name[:30] or s.id[:8] for s in running])
+                tabs = st.tabs([f"{status_emoji('running')} {s.name[:30] or s.id[:8]}" for s in running])
                 for tab, study in zip(tabs, running):
                     with tab:
                         _render_study_body(session, study)
@@ -788,9 +787,9 @@ def page_mis_estudios():
         if not history:
             st.caption("Todavia no hay estudios finalizados.")
         for study in history:
-            icon = {"completed": "Completado", "failed": "Fallido", "stopped": "Detenido"}.get(study.status, study.status)
+            label = {"completed": "Completado", "failed": "Fallido", "stopped": "Detenido"}.get(study.status, study.status)
             fecha = study.started_at.strftime("%Y-%m-%d %H:%M") if study.started_at else "-"
-            with st.expander(f"[{icon}] {study.name} - {fecha}"):
+            with st.expander(f"{status_emoji(study.status)} {label} — {study.name} · {fecha}"):
                 _render_study_body(session, study)
     finally:
         session.close()
@@ -928,7 +927,8 @@ def page_mis_plantillas():
                     st.warning(f"Esta accion eliminara la plantilla **{tpl.name}**. Los estudios ya ejecutados con ella NO se eliminan.")
                     confirm_key = f"confirm_del_{tpl.id}"
                     st.checkbox("Confirmo que quiero eliminar esta plantilla", key=confirm_key)
-                    if st.button("Eliminar plantilla", type="primary", key=f"del_{tpl.id}"):
+                    tpl_del_zone = st.container(key=f"danger_zone_tpl_{tpl.id}")
+                    if tpl_del_zone.button("Eliminar plantilla", key=f"del_{tpl.id}"):
                         if st.session_state.get(confirm_key):
                             repo.delete_template(session, tpl.id)
                             st.success("Plantilla eliminada.")

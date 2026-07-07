@@ -17,9 +17,11 @@ PORTAL_STATUS: dict[str, dict] = {
     "indeed": {
         "status": "PARCIAL",
         "nota": (
-            "Funciona para el primer keyword de cada sesión. "
-            "Indeed activa detección de bots después de la primera búsqueda exitosa. "
-            "Workaround: usar máx. 1 keyword por estudio cuando se incluye Indeed."
+            "Funciona correctamente combinado con otros portales y con varios "
+            "keywords: cada búsqueda keyword+ciudad usa un contexto de navegador "
+            "nuevo (cookies limpias), lo que evita la detección de bots que antes "
+            "obligaba a usarlo solo. Validado en vivo julio 2026 junto a "
+            "computrabajo, bumeran y linkedin simultáneamente."
         ),
     },
     "bumeran": {
@@ -49,9 +51,11 @@ PORTAL_STATUS: dict[str, dict] = {
     "linkedin": {
         "status": "PARCIAL",
         "nota": (
-            "Protecciones anti-bot agresivas. "
-            "Funciona para búsquedas públicas sin login, con delays conservadores. "
-            "Volumen bajo comparado con portales dedicados."
+            "Protecciones anti-bot agresivas, pero el mismo contexto fresco por "
+            "keyword+ciudad que usa Indeed permite combinarlo de forma segura con "
+            "otros portales (validado en vivo julio 2026). Funciona para búsquedas "
+            "públicas sin login, con delays conservadores. Volumen y precisión "
+            "menores que portales dedicados."
         ),
     },
 }
@@ -73,13 +77,13 @@ PORTAL_CAPABILITIES: dict[str, dict] = {
         "cobertura":        "Perú — amplia. Más de 10 000 ofertas activas.",
     },
     "indeed": {
-        "uso_simultaneo":   False,
+        "uso_simultaneo":   True,
         "nota_simultaneo":  (
-            "NO combinar con otras búsquedas en la misma sesión de Playwright. "
-            "Indeed bloquea después de la primera búsqueda exitosa por sesión. "
-            "Si se usa, ponerlo solo y con 1 keyword."
+            "Seguro combinarlo con cualquier otro portal: SIVML le da un contexto "
+            "de navegador nuevo por cada keyword+ciudad (fresh_context_per_keyword), "
+            "evitando la detección de bots que antes forzaba a usarlo solo."
         ),
-        "max_keywords":     "1 por sesión de navegador. Reiniciar navegador para más.",
+        "max_keywords":     "Sin límite — cada uno corre en su propio contexto fresco.",
         "paginacion":       "Offsets de 15. Hasta ~10 páginas antes de detección.",
         "anti_bot":         "Alto. Detecta bots por velocidad, fingerprinting y cookies.",
         "delay_recomendado": "5–10 s entre peticiones.",
@@ -121,9 +125,12 @@ PORTAL_CAPABILITIES: dict[str, dict] = {
         "cobertura":        "Internacional. Agrega resultados de múltiples portales.",
     },
     "linkedin": {
-        "uso_simultaneo":   False,
-        "nota_simultaneo":  "Usar solo, con delays altos. No combinar con Indeed en la misma sesión.",
-        "max_keywords":     "1–2 por sesión antes de posible detección.",
+        "uso_simultaneo":   True,
+        "nota_simultaneo":  (
+            "Seguro combinarlo con otros portales (incluido Indeed) gracias al "
+            "contexto de navegador fresco por keyword+ciudad."
+        ),
+        "max_keywords":     "Sin límite técnico — cada uno corre en su propio contexto fresco.",
         "paginacion":       "Offsets de 25. Máx. ~5 páginas sin login.",
         "anti_bot":         "Muy alto. Fingerprinting avanzado, requiere cookies de sesión para volúmenes altos.",
         "delay_recomendado": "5–15 s entre peticiones.",
@@ -141,11 +148,17 @@ ACTIVE_PORTALS: list[str] = ["computrabajo", "indeed", "bumeran", "linkedin"]
 # Portales que NO funcionan actualmente (excluidos automaticamente del scraping)
 INACTIVE_PORTALS: list[str] = ["laborum", "jooble"]
 
-# Combinaciones seguras para uso simultaneo
+# Combinaciones seguras para uso simultaneo. Desde que Indeed y LinkedIn usan
+# contexto de navegador fresco por keyword+ciudad (fresh_context_per_keyword),
+# los 4 portales activos se pueden combinar entre si sin problema -- validado
+# en vivo julio 2026 corriendo los 4 juntos en paralelo.
 SAFE_COMBINATIONS: list[list[str]] = [
     ["computrabajo"],
     ["bumeran"],
+    ["indeed"],
+    ["linkedin"],
     ["computrabajo", "bumeran"],
-    ["indeed"],   # indeed siempre solo (detecta bots si se combina)
-    ["linkedin"], # linkedin siempre solo
+    ["computrabajo", "indeed"],
+    ["computrabajo", "linkedin"],
+    ["computrabajo", "bumeran", "indeed", "linkedin"],
 ]

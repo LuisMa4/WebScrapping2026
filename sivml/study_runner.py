@@ -14,6 +14,7 @@ BD (Study.status, ScrapingRun) para dibujar el progreso.
 """
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 
@@ -23,6 +24,8 @@ from database.session import SessionLocal
 from processing.deduplicator import run_exact_dedup
 from exports.excel_exporter import export_study_to_excel
 from scraping import run_scraping
+
+logger = logging.getLogger("sivml.study_runner")
 
 MAX_CONCURRENT_STUDIES = 5
 OUTPUT_DIR = Path(__file__).parent / "output"
@@ -54,7 +57,17 @@ def _spawn(cfg: StudyConfig, study_id: str, dry_run: bool) -> None:
 
 def _run_and_cascade(cfg: StudyConfig, study_id: str, dry_run: bool) -> None:
     execute_study(cfg, study_id, dry_run)
-    promote_next_queued()
+    try:
+        promote_next_queued()
+    except Exception:
+        # Si promover la cola falla, el estudio que SI termino (execute_study,
+        # arriba) ya quedo bien guardado -- no perder eso por un error al
+        # intentar arrancar el siguiente. Si queda algo en cola sin promover,
+        # se recupera solo cuando termine OTRO estudio corriendo (tambien
+        # llama promote_next_queued); si no queda ninguno corriendo, el aviso
+        # de "mas de 15 min en cola sin arrancar" en Mis Estudios permite
+        # detectarlo y marcarlo como fallido manualmente.
+        logger.error("Error promoviendo el siguiente estudio en cola", exc_info=True)
 
 
 def execute_study(cfg: StudyConfig, study_id: str, dry_run: bool) -> None:
@@ -89,6 +102,7 @@ def execute_study(cfg: StudyConfig, study_id: str, dry_run: bool) -> None:
 
         repo.finish_study(session, study_id, success=True)
     except Exception:
+        logger.error(f"Error ejecutando estudio {study_id}", exc_info=True)
         session.rollback()
         repo.finish_study(session, study_id, success=False)
     finally:

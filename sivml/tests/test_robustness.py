@@ -83,9 +83,15 @@ class TestPortalCapabilities:
         for portal, cap in PORTAL_CAPABILITIES.items():
             assert isinstance(cap["campos_disponibles"], list), f"Portal '{portal}': campos_disponibles debe ser list"
 
-    def test_indeed_no_simultaneo(self):
+    def test_indeed_simultaneo_ok(self):
+        """
+        Indeed usa fresh_context_per_keyword (ver scraping.py) -- cada busqueda
+        keyword+ciudad corre en un contexto de navegador nuevo, lo que evita la
+        deteccion de bots que antes obligaba a usarlo solo. Validado en vivo
+        corriendo junto a computrabajo/bumeran/linkedin.
+        """
         from scrapers.portal_info import PORTAL_CAPABILITIES
-        assert PORTAL_CAPABILITIES["indeed"]["uso_simultaneo"] is False
+        assert PORTAL_CAPABILITIES["indeed"]["uso_simultaneo"] is True
 
     def test_computrabajo_simultaneo(self):
         from scrapers.portal_info import PORTAL_CAPABILITIES

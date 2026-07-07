@@ -11,3 +11,4 @@ venv/
 dist/
 build/
 *.egg-info/
+.sivml_draft_nuevo_estudio.json
