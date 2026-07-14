@@ -65,6 +65,30 @@ def _filter_by_date_range(jobs, cfg):
     return kept, excluded
 
 
+def _search_with_expanded_terms(scraper, keyword: str, city: str) -> list:
+    """
+    Busca una keyword en el portal. Si tiene varias palabras, el portal la
+    trata como si TODAS tuvieran que aparecer juntas en la oferta -- eso
+    descarta ofertas legitimas y puede terminar en 0 resultados para keywords
+    como "analista de datos junior". En vez de mandar la frase completa, se
+    busca cada palabra significativa por separado (expand_keyword_terms) y se
+    juntan los resultados sin duplicados -- basta con que UNA de ellas
+    coincida, en vez de exigir la frase completa.
+    """
+    from processing.keyword_expansion import expand_keyword_terms
+
+    terms = expand_keyword_terms(keyword)
+    seen_source_ids = set()
+    merged = []
+    for term in terms:
+        for job in scraper.search(term, city):
+            if job.source_id in seen_source_ids:
+                continue
+            seen_source_ids.add(job.source_id)
+            merged.append(job)
+    return merged
+
+
 def run_scraping(
     session,
     cfg: StudyConfig,
@@ -276,7 +300,7 @@ def _scrape_portal_fresh_ctx(session, cfg, study_id, dry_run, browser, portal_na
             new_count = 0
 
             try:
-                jobs = scraper.search(keyword, city)
+                jobs = _search_with_expanded_terms(scraper, keyword, city)
                 jobs, excluded_by_date = _filter_by_date_range(jobs, cfg)
                 if not dry_run:
                     enriched = []
@@ -338,7 +362,7 @@ def _scrape_portal(session, cfg, study_id, dry_run, page, portal_name, log):
             new_count = 0
 
             try:
-                jobs = scraper.search(keyword, city)
+                jobs = _search_with_expanded_terms(scraper, keyword, city)
                 jobs, excluded_by_date = _filter_by_date_range(jobs, cfg)
                 if not dry_run:
                     enriched = []
