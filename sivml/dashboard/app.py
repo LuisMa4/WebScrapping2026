@@ -807,6 +807,73 @@ def page_mis_estudios():
 # PAGINA: Mis Plantillas
 # ---------------------------------------------------------------------------
 
+def _render_automation_section(session) -> None:
+    """
+    Interruptor + estado + acciones de la automatizacion semanal (4
+    plantillas fijas -> scraping -> Excel -> Drive, disparada por una Tarea
+    Programada de Windows los lunes). Vive al principio de "Mis Plantillas".
+    """
+    from database import repository as repo
+
+    settings = repo.get_automation_settings(session)
+
+    with st.container(border=True):
+        st.subheader("Automatizacion semanal")
+        st.caption(
+            "Corre las 4 plantillas fijas cada lunes con los ultimos 7 dias "
+            "y sube los Excel a Google Drive."
+        )
+
+        new_enabled = st.toggle("Activa", value=settings.enabled, key="automation_enabled_toggle")
+        if new_enabled != settings.enabled:
+            repo.set_automation_enabled(session, new_enabled)
+            st.rerun()
+
+        if settings.last_run_at:
+            last_run_str = settings.last_run_at.strftime("%Y-%m-%d %H:%M")
+            st.caption(
+                f"Ultima corrida: {last_run_str} -- **{settings.last_run_status}** -- "
+                f"{settings.last_run_message}"
+            )
+        else:
+            st.caption("Todavia no se ha corrido ninguna vez.")
+
+        bcol1, bcol2 = st.columns(2)
+        with bcol1:
+            if st.button("Probar ahora", key="run_automation_now", use_container_width=True):
+                import threading
+                from weekly_run import run_weekly_automation
+
+                threading.Thread(target=run_weekly_automation, daemon=True).start()
+                st.info(
+                    "Corrida iniciada en segundo plano -- sigue el progreso de "
+                    "las 4 plantillas en **Mis Estudios**."
+                )
+
+        with bcol2:
+            with st.popover("Instalar tarea programada de Windows"):
+                st.caption(
+                    "Crea una Tarea Programada de Windows que corre "
+                    "`weekly_run.py` cada lunes a las 7:00 AM."
+                )
+                from scripts.install_weekly_task import build_schtasks_command
+                st.code(" ".join(build_schtasks_command()))
+                confirm_task = st.checkbox(
+                    "Confirmo que quiero instalar esta tarea programada",
+                    key="confirm_install_task",
+                )
+                if st.button("Instalar", key="install_task_btn"):
+                    if confirm_task:
+                        from scripts.install_weekly_task import install_task
+                        ok, output = install_task()
+                        if ok:
+                            st.success("Tarea programada instalada correctamente.")
+                        else:
+                            st.error(f"No se pudo instalar: {output}")
+                    else:
+                        st.error("Marca la casilla de confirmacion primero.")
+
+
 def page_mis_plantillas():
     from datetime import timedelta
     from database import repository as repo
@@ -817,6 +884,8 @@ def page_mis_plantillas():
 
     session = _session()
     try:
+        _render_automation_section(session)
+
         templates = repo.list_templates(session)
 
         if not templates:
