@@ -166,6 +166,27 @@ class StudyTemplate(Base):
         self.portals_json = json.dumps(value, ensure_ascii=False)
 
 
+class AutomationSettings(Base):
+    """Configuracion de la automatizacion semanal (fila unica, id=1)."""
+    __tablename__ = "automation_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    drive_folder_id: Mapped[str | None] = mapped_column(String(255))
+    template_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime)
+    last_run_status: Mapped[str | None] = mapped_column(String(20))  # success|partial|failed
+    last_run_message: Mapped[str | None] = mapped_column(Text)
+
+    @property
+    def template_ids(self) -> list[int]:
+        return json.loads(self.template_ids_json)
+
+    @template_ids.setter
+    def template_ids(self, value: list[int]) -> None:
+        self.template_ids_json = json.dumps(value)
+
+
 class ScrapingRun(Base):
     """Log de observabilidad por portal/keyword/ciudad."""
     __tablename__ = "scraping_runs"

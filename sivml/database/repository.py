@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import StaleDataError
 
 from config.settings import StudyConfig, study_config_from_dict, study_config_to_dict
-from database.models import Job, RawJob, ScrapingRun, Study, StudyTemplate
+from database.models import AutomationSettings, Job, RawJob, ScrapingRun, Study, StudyTemplate
 from scrapers.base import ScrapedJob
 
 
@@ -439,3 +439,46 @@ def mark_template_used(session: Session, template_id: int) -> None:
         t.last_run_at = datetime.utcnow()
         t.run_count = (t.run_count or 0) + 1
         session.commit()
+
+
+# ---------------------------------------------------------------------------
+# Automatizacion semanal
+# ---------------------------------------------------------------------------
+
+DEFAULT_AUTOMATION_TEMPLATE_IDS = [8, 9, 10, 11]
+DEFAULT_AUTOMATION_DRIVE_FOLDER_ID = "1-AkvMOuf7tQYWGbkKSxGRCqYxiEOfHk1"
+
+
+def get_automation_settings(session: Session) -> AutomationSettings:
+    """
+    Devuelve la fila unica (id=1) de configuracion de la automatizacion
+    semanal, creandola con los defaults del proyecto (las 4 plantillas fijas
+    y la carpeta de Drive ya conocida) si todavia no existe.
+    """
+    settings = session.get(AutomationSettings, 1)
+    if settings is None:
+        settings = AutomationSettings(
+            id=1,
+            enabled=False,
+            drive_folder_id=DEFAULT_AUTOMATION_DRIVE_FOLDER_ID,
+            template_ids_json=json.dumps(DEFAULT_AUTOMATION_TEMPLATE_IDS),
+        )
+        session.add(settings)
+        session.commit()
+    return settings
+
+
+def set_automation_enabled(session: Session, enabled: bool) -> AutomationSettings:
+    settings = get_automation_settings(session)
+    settings.enabled = enabled
+    session.commit()
+    return settings
+
+
+def record_automation_run(session: Session, status: str, message: str) -> AutomationSettings:
+    settings = get_automation_settings(session)
+    settings.last_run_at = datetime.utcnow()
+    settings.last_run_status = status
+    settings.last_run_message = message
+    session.commit()
+    return settings
