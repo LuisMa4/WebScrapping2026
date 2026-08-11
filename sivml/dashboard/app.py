@@ -57,6 +57,14 @@ def _session():
     from database.session import SessionLocal
     return SessionLocal()
 
+
+def _normalize_search_text(text: str) -> str:
+    """Minusculas + sin tildes, para que el buscador de Resultados encuentre
+    'derecho' aunque el texto original diga 'Derecho' o use otra tilde."""
+    import unicodedata
+    text = unicodedata.normalize("NFD", text.lower())
+    return "".join(c for c in text if unicodedata.category(c) != "Mn")
+
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
@@ -864,11 +872,25 @@ def page_mis_plantillas():
                         df_from = tpl.last_run_at.date() if tpl.last_run_at else today - timedelta(days=30)
                         df_to = today
 
+                    # Los widgets st.date_input de abajo tienen key fijo, asi que
+                    # una vez creados IGNORAN el value= en reruns posteriores --
+                    # solo leen su propio session_state. Sin esto, cambiar el
+                    # radio de arriba (ej. de "7d" a "Ultimo mes") no actualizaba
+                    # las fechas reales usadas para lanzar el scraping, aunque el
+                    # radio mostrara la nueva seleccion (reproducido en vivo).
+                    # Por eso el preset se detecta ANTES de crear los widgets y se
+                    # sobreescribe su session_state directamente cuando cambia.
+                    prev_preset_key = f"_prev_preset_{tpl.id}"
+                    if st.session_state.get(prev_preset_key) != preset:
+                        st.session_state[f"dfrom_{tpl.id}"] = df_from
+                        st.session_state[f"dto_{tpl.id}"] = df_to
+                        st.session_state[prev_preset_key] = preset
+
                     dc1, dc2 = st.columns(2)
                     with dc1:
-                        run_date_from = st.date_input("Desde", value=df_from, key=f"dfrom_{tpl.id}")
+                        run_date_from = st.date_input("Desde", key=f"dfrom_{tpl.id}")
                     with dc2:
-                        run_date_to = st.date_input("Hasta", value=df_to, key=f"dto_{tpl.id}")
+                        run_date_to = st.date_input("Hasta", key=f"dto_{tpl.id}")
 
                     dry_run_tpl = st.checkbox("Dry run", key=f"dry_{tpl.id}",
                                                help="Solo listing, sin descripcion completa. Mas rapido.")
@@ -992,6 +1014,7 @@ def page_resultados():
             "Salario Max": j.salary_max,
             "Moneda":      j.salary_currency or "-",
             "URL":         j.url or "",
+            "Descripcion": j.description_clean or "",
         } for j in jobs])
 
         st.subheader(study.name)
@@ -1009,6 +1032,11 @@ def page_resultados():
         st.divider()
 
         with st.expander("Filtros", expanded=True):
+            f_kw = st.text_input(
+                "Buscar por palabra clave",
+                placeholder="ej. derecho",
+                help="Busca en el titulo y la descripcion de la oferta. Ignora mayusculas/tildes.",
+            )
             fc1, fc2, fc3, fc4 = st.columns(4)
             with fc1:
                 f_ciudad = st.selectbox("Ciudad", ["Todas"] + sorted(df["Ciudad"].dropna().unique().tolist()))
@@ -1024,6 +1052,10 @@ def page_resultados():
         if f_portal != "Todos":  mask &= df["Portal"] == f_portal
         if f_modal != "Todas":   mask &= df["Modalidad"] == f_modal
         if f_edu != "Todas":     mask &= df["Educacion"] == f_edu
+        if f_kw.strip():
+            needle = _normalize_search_text(f_kw)
+            haystack = (df["Titulo"] + " " + df["Descripcion"]).map(_normalize_search_text)
+            mask &= haystack.str.contains(needle, regex=False)
 
         df_f = df[mask].copy()
         st.caption(f"{len(df_f)} ofertas con los filtros aplicados")
