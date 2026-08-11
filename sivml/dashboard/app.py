@@ -841,14 +841,20 @@ def _render_automation_section(session) -> None:
         bcol1, bcol2 = st.columns(2)
         with bcol1:
             if st.button("Probar ahora", key="run_automation_now", use_container_width=True):
-                import threading
-                from weekly_run import run_weekly_automation
+                if not settings.enabled:
+                    st.warning(
+                        "La automatizacion esta desactivada -- activa el interruptor de "
+                        "arriba antes de probar, o no se ejecutara nada."
+                    )
+                else:
+                    import threading
+                    from weekly_run import run_weekly_automation
 
-                threading.Thread(target=run_weekly_automation, daemon=True).start()
-                st.info(
-                    "Corrida iniciada en segundo plano -- sigue el progreso de "
-                    "las 4 plantillas en **Mis Estudios**."
-                )
+                    threading.Thread(target=run_weekly_automation, daemon=True).start()
+                    st.info(
+                        "Corrida iniciada en segundo plano -- sigue el progreso de "
+                        "las 4 plantillas en **Mis Estudios**."
+                    )
 
         with bcol2:
             with st.popover("Instalar tarea programada de Windows"):

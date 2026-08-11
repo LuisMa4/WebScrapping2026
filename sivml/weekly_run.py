@@ -26,7 +26,7 @@ if Path.cwd() != ROOT:
 
 from config.settings import ScraperConfig, StudyConfig
 from database import repository as repo
-from database.session import SessionLocal
+from database.session import SessionLocal, init_db
 from integrations import google_drive
 import study_runner
 
@@ -65,6 +65,7 @@ def run_weekly_automation() -> dict:
             "message": str,
         }
     """
+    init_db()
     session = SessionLocal()
     try:
         settings = repo.get_automation_settings(session)
@@ -72,71 +73,86 @@ def run_weekly_automation() -> dict:
             logger.info("Automatizacion desactivada, no se hace nada.")
             return {"ran": False, "results": [], "upload": None, "message": "Automatizacion desactivada."}
 
-        today = date.today()
-        date_from, date_to = today - timedelta(days=7), today
-        template_ids = json.loads(settings.template_ids_json)
+        try:
+            today = date.today()
+            date_from, date_to = today - timedelta(days=7), today
+            template_ids = json.loads(settings.template_ids_json)
 
-        results: list[tuple[str, str | None, Path | None, str | None]] = []
-        for tid in template_ids:
-            tpl = repo.get_template(session, tid)
-            if tpl is None:
-                results.append((f"[plantilla id {tid} no encontrada]", None, None, "plantilla eliminada"))
-                continue
-            try:
-                cfg = _build_cfg_from_template(tpl, date_from, date_to)
-                study = repo.create_study(session, cfg, status="running", dry_run=False)
-                repo.mark_template_used(session, tpl.id)
-                excel_path = study_runner.execute_study(cfg, study.id, dry_run=False)
-                results.append((tpl.name, study.id, excel_path, None))
-            except Exception as exc:
-                logger.exception(f"Error corriendo plantilla {tpl.name}")
-                results.append((tpl.name, None, None, str(exc)))
+            results: list[tuple[str, str | None, Path | None, str | None]] = []
+            for tid in template_ids:
+                tpl = None
+                try:
+                    tpl = repo.get_template(session, tid)
+                    if tpl is None:
+                        results.append((f"[plantilla id {tid} no encontrada]", None, None, "plantilla eliminada"))
+                        continue
+                    cfg = _build_cfg_from_template(tpl, date_from, date_to)
+                    study = repo.create_study(session, cfg, status="running", dry_run=False)
+                    repo.mark_template_used(session, tpl.id)
+                    excel_path = study_runner.execute_study(cfg, study.id, dry_run=False)
+                    results.append((tpl.name, study.id, excel_path, None))
+                except Exception as exc:
+                    session.rollback()
+                    tpl_name = tpl.name if tpl is not None else f"[plantilla id {tid}]"
+                    logger.exception(f"Error corriendo plantilla {tpl_name}")
+                    results.append((tpl_name, None, None, str(exc)))
 
-        excel_paths = [r[2] for r in results if r[2] is not None]
-        upload_result = None
-        if not excel_paths:
-            upload_note = "Sin Excel generados, no se subio nada a Drive."
-        elif not settings.drive_folder_id:
-            upload_note = "Sin carpeta de Drive configurada, no se subio nada."
-        elif not CREDENTIALS_PATH.exists():
-            upload_note = (
-                f"Archivo de credenciales no encontrado en {CREDENTIALS_PATH} "
-                "-- sigue el instructivo para crear la cuenta de servicio."
-            )
-        else:
-            try:
-                upload_result = google_drive.upload_files_to_dated_folder(
-                    credentials_path=str(CREDENTIALS_PATH),
-                    parent_folder_id=settings.drive_folder_id,
-                    date_str=today.isoformat(),
-                    file_paths=excel_paths,
+            excel_paths = [r[2] for r in results if r[2] is not None]
+            upload_result = None
+            if not excel_paths:
+                upload_note = "Sin Excel generados, no se subio nada a Drive."
+            elif not settings.drive_folder_id:
+                upload_note = "Sin carpeta de Drive configurada, no se subio nada."
+            elif not CREDENTIALS_PATH.exists():
+                upload_note = (
+                    f"Archivo de credenciales no encontrado en {CREDENTIALS_PATH} "
+                    "-- sigue el instructivo para crear la cuenta de servicio."
                 )
-                upload_note = f"Subidos {len(upload_result.uploaded)}/{len(excel_paths)} archivos a Drive."
-                if upload_result.failed:
-                    upload_note += f" {len(upload_result.failed)} fallaron."
-            except Exception as exc:
-                logger.exception("Error subiendo a Drive")
-                upload_note = f"Error subiendo a Drive: {exc}"
+            else:
+                try:
+                    upload_result = google_drive.upload_files_to_dated_folder(
+                        credentials_path=str(CREDENTIALS_PATH),
+                        parent_folder_id=settings.drive_folder_id,
+                        date_str=today.isoformat(),
+                        file_paths=excel_paths,
+                    )
+                    upload_note = f"Subidos {len(upload_result.uploaded)}/{len(excel_paths)} archivos a Drive."
+                    if upload_result.failed:
+                        upload_note += f" {len(upload_result.failed)} fallaron."
+                except Exception as exc:
+                    logger.exception("Error subiendo a Drive")
+                    upload_note = f"Error subiendo a Drive: {exc}"
 
-        n_ok = sum(1 for r in results if r[3] is None)
-        upload_ok = (not excel_paths) or (upload_result is not None and not upload_result.failed)
-        if n_ok == 0:
-            status = "failed"
-        elif n_ok == len(results) and upload_ok:
-            status = "success"
-        else:
-            status = "partial"
+            n_ok = sum(1 for r in results if r[3] is None)
+            upload_ok = (not excel_paths) or (upload_result is not None and not upload_result.failed)
+            if n_ok == 0:
+                status = "failed"
+            elif n_ok == len(results) and upload_ok:
+                status = "success"
+            else:
+                status = "partial"
 
-        message = f"{n_ok}/{len(results)} plantillas OK. {upload_note}"
-        repo.record_automation_run(session, status=status, message=message)
+            message = f"{n_ok}/{len(results)} plantillas OK. {upload_note}"
+            repo.record_automation_run(session, status=status, message=message)
 
-        return {"ran": True, "results": results, "upload": upload_result, "message": message}
+            return {"ran": True, "results": results, "upload": upload_result, "message": message}
+        except Exception as outer_exc:
+            logger.exception("Fallo inesperado en run_weekly_automation")
+            repo.record_automation_run(session, status="failed", message=f"Error inesperado: {outer_exc}")
+            raise
     finally:
         session.close()
 
 
 def main() -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[
+            logging.FileHandler(ROOT / "sivml_weekly_run.log", encoding="utf-8"),
+            logging.StreamHandler(),
+        ],
+    )
     summary = run_weekly_automation()
     logger.info(summary["message"])
     return 0

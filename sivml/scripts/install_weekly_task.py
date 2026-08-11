@@ -8,12 +8,20 @@ dashboard (dashboard/app.py::_render_automation_section).
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 TASK_NAME = "SIVML_CorridaSemanal"
 ROOT = Path(__file__).parent.parent
+
+
+def _current_username() -> str:
+    try:
+        return os.getlogin()
+    except OSError:
+        return os.environ.get("USERNAME", "")
 
 
 def build_schtasks_command(hour_minute: str = "07:00", python_exe: str | None = None) -> list[str]:
@@ -26,6 +34,7 @@ def build_schtasks_command(hour_minute: str = "07:00", python_exe: str | None = 
         "/sc", "weekly",
         "/d", "MON",
         "/st", hour_minute,
+        "/ru", _current_username(), "/np",  # corre haya o no un usuario con sesion iniciada
         "/f",  # sobreescribe si ya existe -- permite re-instalar tras cambiar la hora
     ]
 

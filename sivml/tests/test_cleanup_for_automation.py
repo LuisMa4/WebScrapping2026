@@ -9,11 +9,14 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from database import session as db_session
 from database.session import Base
 from database import repository as repo
 from database.models import Study, StudyTemplate
@@ -103,3 +106,100 @@ class TestBackupDb:
         assert backup_path.exists()
         assert backup_path.read_bytes() == b"fake sqlite content"
         assert "bak_pre_weekly_automation" in backup_path.name
+
+
+def _make_in_memory_session_local():
+    """
+    main() does `from database.session import SessionLocal, init_db` as a
+    LOCAL import inside the function body, so it re-reads those names off
+    the `database.session` module fresh on every call -- monkeypatching the
+    module's attributes (rather than cleanup_for_automation's) is what
+    actually redirects main() away from the real file-backed sivml.db.
+    """
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine)
+
+
+class TestMainConfirmationGate:
+    def test_refuses_to_delete_without_exact_borrar_confirmation(self, monkeypatch):
+        test_session_local = _make_in_memory_session_local()
+        seed_session = test_session_local()
+        _make_template(seed_session, 8, "Ingenieria Civil")  # avoid the "no templates found" early-abort
+        seed_session.close()
+
+        monkeypatch.setattr(db_session, "SessionLocal", test_session_local)
+        monkeypatch.setattr(db_session, "init_db", lambda: None)
+
+        backup_calls = []
+        cleanup_calls = []
+        monkeypatch.setattr(
+            cleanup_for_automation, "backup_db",
+            lambda root: backup_calls.append(root) or Path("fake_backup"),
+        )
+        monkeypatch.setattr(
+            cleanup_for_automation, "run_cleanup",
+            lambda session, summary: cleanup_calls.append(1),
+        )
+        monkeypatch.setattr("builtins.input", lambda _: "no")
+
+        rc = cleanup_for_automation.main()
+
+        assert backup_calls == []
+        assert cleanup_calls == []
+        assert rc == 0
+
+    def test_anything_other_than_exact_borrar_also_refuses(self, monkeypatch):
+        test_session_local = _make_in_memory_session_local()
+        seed_session = test_session_local()
+        _make_template(seed_session, 8, "Ingenieria Civil")
+        seed_session.close()
+
+        monkeypatch.setattr(db_session, "SessionLocal", test_session_local)
+        monkeypatch.setattr(db_session, "init_db", lambda: None)
+
+        backup_calls = []
+        cleanup_calls = []
+        monkeypatch.setattr(
+            cleanup_for_automation, "backup_db",
+            lambda root: backup_calls.append(root) or Path("fake_backup"),
+        )
+        monkeypatch.setattr(
+            cleanup_for_automation, "run_cleanup",
+            lambda session, summary: cleanup_calls.append(1),
+        )
+        # trailing/leading whitespace and case variants must NOT count as confirmation
+        monkeypatch.setattr("builtins.input", lambda _: "borrar")
+
+        rc = cleanup_for_automation.main()
+
+        assert backup_calls == []
+        assert cleanup_calls == []
+        assert rc == 0
+
+
+class TestMainBackupBeforeDeletion:
+    def test_backup_happens_before_deletion(self, monkeypatch):
+        test_session_local = _make_in_memory_session_local()
+        seed_session = test_session_local()
+        _make_template(seed_session, 8, "Ingenieria Civil")
+        seed_session.close()
+
+        monkeypatch.setattr(db_session, "SessionLocal", test_session_local)
+        monkeypatch.setattr(db_session, "init_db", lambda: None)
+
+        call_order = []
+        monkeypatch.setattr(
+            cleanup_for_automation, "backup_db",
+            lambda root: call_order.append("backup") or Path("fake_backup"),
+        )
+        monkeypatch.setattr(
+            cleanup_for_automation, "run_cleanup",
+            lambda session, summary: call_order.append("cleanup"),
+        )
+        monkeypatch.setattr("builtins.input", lambda _: "BORRAR")
+
+        rc = cleanup_for_automation.main()
+
+        assert call_order == ["backup", "cleanup"]
+        assert rc == 0

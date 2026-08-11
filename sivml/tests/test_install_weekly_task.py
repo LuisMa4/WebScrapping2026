@@ -27,3 +27,11 @@ class TestBuildSchtasksCommand:
         tr_value = cmd[tr_index + 1]
         assert "C:\\fake\\python.exe" in tr_value
         assert "weekly_run.py" in tr_value
+
+    def test_runs_whether_or_not_a_user_is_logged_on(self):
+        cmd = install_weekly_task.build_schtasks_command()
+        assert "/ru" in cmd
+        ru_index = cmd.index("/ru")
+        ru_value = cmd[ru_index + 1]
+        assert ru_value  # non-empty username
+        assert "/np" in cmd
