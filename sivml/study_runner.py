@@ -70,14 +70,17 @@ def _run_and_cascade(cfg: StudyConfig, study_id: str, dry_run: bool) -> None:
         logger.error("Error promoviendo el siguiente estudio en cola", exc_info=True)
 
 
-def execute_study(cfg: StudyConfig, study_id: str, dry_run: bool) -> None:
+def execute_study(cfg: StudyConfig, study_id: str, dry_run: bool) -> Path | None:
     """
     Pipeline completo de un estudio: scraping -> finalizar -> deduplicar ->
     exportar a Excel. Cada estudio usa su PROPIA session (no se comparte
     entre hilos), igual que ya hace scraping.py para paralelizar portales
-    dentro de un mismo estudio.
+    dentro de un mismo estudio. Devuelve la ruta del Excel generado, o None
+    si no se genero ninguno (sin ofertas, detenido, o fallo) -- usado por
+    weekly_run.py para saber que archivos subir a Drive.
     """
     session = SessionLocal()
+    excel_path: Path | None = None
     try:
         run_scraping(session, cfg, study_id, dry_run=dry_run)
 
@@ -98,7 +101,7 @@ def execute_study(cfg: StudyConfig, study_id: str, dry_run: bool) -> None:
                 stats = run_exact_dedup(session, study_id)
                 if stats["jobs_created"] > 0:
                     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-                    export_study_to_excel(session, study_id, output_dir=OUTPUT_DIR)
+                    excel_path = export_study_to_excel(session, study_id, output_dir=OUTPUT_DIR)
 
         repo.finish_study(session, study_id, success=True)
     except Exception:
@@ -107,6 +110,7 @@ def execute_study(cfg: StudyConfig, study_id: str, dry_run: bool) -> None:
         repo.finish_study(session, study_id, success=False)
     finally:
         session.close()
+    return excel_path
 
 
 def promote_next_queued() -> None:

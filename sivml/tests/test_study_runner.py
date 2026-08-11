@@ -213,6 +213,30 @@ class TestExecuteStudy:
         assert updated.status == "stopped"
         check_session.close()
 
+    def test_returns_the_excel_path_when_one_is_generated(self, session, cfg, monkeypatch, tmp_path):
+        monkeypatch.setattr(study_runner, "run_scraping", _fake_run_scraping_with_result)
+        monkeypatch.setattr(study_runner, "OUTPUT_DIR", tmp_path)
+        study = repo.create_study(session, cfg)
+        study_id = study.id
+        session.close()
+
+        result = study_runner.execute_study(cfg, study_id, dry_run=False)
+
+        assert result is not None
+        assert result.exists()
+        assert result.suffix == ".xlsx"
+
+    def test_returns_none_when_no_jobs_found(self, session, cfg, monkeypatch, tmp_path):
+        monkeypatch.setattr(study_runner, "run_scraping", _fake_run_scraping_no_results)
+        monkeypatch.setattr(study_runner, "OUTPUT_DIR", tmp_path)
+        study = repo.create_study(session, cfg)
+        study_id = study.id
+        session.close()
+
+        result = study_runner.execute_study(cfg, study_id, dry_run=False)
+
+        assert result is None
+
 
 class TestPromoteNextQueued:
     def test_promotes_oldest_queued_when_slot_free(self, session, cfg, monkeypatch):
