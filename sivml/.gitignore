@@ -1,6 +1,7 @@
 .env
 credentials/
 *.db
+*.db.bak_*
 *.sqlite
 output/
 __pycache__/

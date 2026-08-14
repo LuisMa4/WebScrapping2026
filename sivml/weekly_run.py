@@ -31,7 +31,12 @@ from integrations import google_drive
 import study_runner
 
 logger = logging.getLogger("sivml.weekly_run")
-CREDENTIALS_PATH = ROOT / "credentials" / "google_service_account.json"
+# OAuth client (Desktop app), NO cuenta de servicio -- las cuentas de
+# servicio no pueden subir archivos a una carpeta de Drive personal
+# (confirmado en vivo: sin cuota de almacenamiento propia). El token
+# generado tras la primera autorizacion se guarda junto a este archivo
+# como google_oauth_token.json (ver integrations/google_drive.py).
+CREDENTIALS_PATH = ROOT / "credentials" / "google_oauth_client.json"
 
 
 def _build_cfg_from_template(tpl, date_from: date, date_to: date) -> StudyConfig:
@@ -105,8 +110,9 @@ def run_weekly_automation() -> dict:
                 upload_note = "Sin carpeta de Drive configurada, no se subio nada."
             elif not CREDENTIALS_PATH.exists():
                 upload_note = (
-                    f"Archivo de credenciales no encontrado en {CREDENTIALS_PATH} "
-                    "-- sigue el instructivo para crear la cuenta de servicio."
+                    f"Archivo de credenciales OAuth no encontrado en {CREDENTIALS_PATH} "
+                    "-- crea un 'OAuth client ID' (Desktop app) en Google Cloud Console "
+                    "y guardalo ahi."
                 )
             else:
                 try:

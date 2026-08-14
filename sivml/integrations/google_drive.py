@@ -15,12 +15,44 @@ _DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
 
 
 def get_drive_service(credentials_path: str):
-    from google.oauth2 import service_account
+    """
+    Autentica via OAuth2 con una cuenta personal de Google -- NO cuenta de
+    servicio. Verificado en vivo (2026-08-11): una cuenta de servicio puede
+    crear carpetas (son solo metadatos) pero NO puede subir archivos a una
+    carpeta de Drive personal -- falla con "Service Accounts do not have
+    storage quota", porque no tienen cuota propia y esa funcion requiere
+    Shared Drives (exclusivo de Google Workspace pagado). OAuth con la
+    cuenta del usuario si tiene cuota real.
+
+    `credentials_path` apunta al "OAuth client ID" (tipo Desktop app)
+    descargado de Google Cloud Console -- NO al JSON de una cuenta de
+    servicio. El token resultante (con refresh token) se guarda como
+    `token.json` junto a ese archivo: la PRIMERA vez abre el navegador para
+    que el usuario autorice una sola vez; en corridas siguientes reutiliza
+    o renueva el token automaticamente sin pedir login de nuevo -- por eso
+    esto sigue siendo apto para la Tarea Programada semanal desatendida
+    despues de esa unica autorizacion inicial.
+    """
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
     from googleapiclient.discovery import build
 
-    creds = service_account.Credentials.from_service_account_file(
-        credentials_path, scopes=_DRIVE_SCOPES,
-    )
+    creds_path = Path(credentials_path)
+    token_path = creds_path.parent / "google_oauth_token.json"
+
+    creds = None
+    if token_path.exists():
+        creds = Credentials.from_authorized_user_file(str(token_path), _DRIVE_SCOPES)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), _DRIVE_SCOPES)
+            creds = flow.run_local_server(port=0)
+        token_path.write_text(creds.to_json(), encoding="utf-8")
+
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
