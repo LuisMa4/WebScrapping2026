@@ -821,7 +821,8 @@ def _render_automation_section(session) -> None:
         st.subheader("Automatizacion semanal")
         st.caption(
             "Corre las 4 plantillas fijas cada lunes con los ultimos 7 dias "
-            "y sube los Excel a Google Drive."
+            "(maximo 15 min por plantilla, se corta y sube lo que haya "
+            "encontrado hasta ese punto) y sube los Excel a Google Drive."
         )
 
         new_enabled = st.toggle("Activa", value=settings.enabled, key="automation_enabled_toggle")

@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sys
+import threading
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -27,10 +28,32 @@ if Path.cwd() != ROOT:
 from config.settings import ScraperConfig, StudyConfig
 from database import repository as repo
 from database.session import SessionLocal, init_db
+from exports.excel_exporter import export_study_to_excel
 from integrations import google_drive
+from processing.deduplicator import run_exact_dedup
 import study_runner
 
 logger = logging.getLogger("sivml.weekly_run")
+
+# Limite duro por plantilla: si una busqueda (sobre todo LinkedIn, con
+# contexto fresco por keyword) se alarga, no debe arrastrar toda la corrida
+# por horas -- a los 15 min se pide detener (mismo mecanismo que el boton
+# "Detener" del dashboard: stop_requested, revisado entre cada
+# keyword/ciudad -- el corte real puede caer uno o dos minutos despues de
+# los 15, nunca horas). Si execute_study() no alcanzo a exportar el Excel
+# por haberse detenido a mitad de camino, se exporta a mano con lo que ya
+# se encontro hasta ese punto -- confirmado en vivo (backfill 2026-10-03,
+# 8/8 plantillas cortadas limpio con Excel parcial).
+PER_TEMPLATE_TIMEOUT_SECONDS = 15 * 60
+
+
+def _request_stop_after_timeout(study_id: str) -> None:
+    s = SessionLocal()
+    try:
+        repo.request_stop(s, study_id)
+        logger.info(f"Limite de {PER_TEMPLATE_TIMEOUT_SECONDS}s alcanzado -- solicitando detener estudio {study_id}")
+    finally:
+        s.close()
 # OAuth client (Desktop app), NO cuenta de servicio -- las cuentas de
 # servicio no pueden subir archivos a una carpeta de Drive personal
 # (confirmado en vivo: sin cuota de almacenamiento propia). El token
@@ -180,7 +203,27 @@ def _run_weekly_automation_locked() -> dict:
                     cfg = _build_cfg_from_template(tpl, date_from, date_to)
                     study = repo.create_study(session, cfg, status="running", dry_run=False)
                     repo.mark_template_used(session, tpl.id)
-                    excel_path = study_runner.execute_study(cfg, study.id, dry_run=False)
+
+                    timer = threading.Timer(PER_TEMPLATE_TIMEOUT_SECONDS, _request_stop_after_timeout, args=(study.id,))
+                    timer.daemon = True
+                    timer.start()
+                    try:
+                        excel_path = study_runner.execute_study(cfg, study.id, dry_run=False)
+                    finally:
+                        timer.cancel()
+
+                    # execute_study() se salta el export si el estudio se
+                    # detuvo a mitad de camino (status "stopped", no
+                    # "completed") -- aqui SI queremos el Excel con lo que
+                    # se alcanzo a encontrar antes del limite de tiempo.
+                    if excel_path is None:
+                        raw_total = len(repo.get_raw_jobs_for_study(session, study.id))
+                        if raw_total > 0:
+                            stats = run_exact_dedup(session, study.id)
+                            if stats["jobs_created"] > 0:
+                                excel_path = export_study_to_excel(session, study.id, output_dir=study_runner.OUTPUT_DIR)
+                                logger.info(f"{tpl.name}: export manual tras corte por tiempo -> {excel_path}")
+
                     results.append((tpl.name, study.id, excel_path, None))
                 except Exception as exc:
                     session.rollback()

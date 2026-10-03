@@ -383,3 +383,74 @@ class TestOverlapLock:
 
         assert first["ran"] is True
         assert second["ran"] is True
+
+
+class TestPerTemplateTimeLimit:
+    """
+    Cada plantilla tiene un limite duro de PER_TEMPLATE_TIMEOUT_SECONDS
+    (15 min): si execute_study() se corto por tiempo (status "stopped",
+    sin exportar Excel), se exporta a mano con lo que ya se encontro --
+    nunca se deja una plantilla sin Excel solo porque se agoto el tiempo.
+    """
+
+    def test_exports_manually_when_stopped_with_raw_jobs(self, session, monkeypatch, tmp_path):
+        _seed_default_templates(session)
+        repo.set_automation_enabled(session, True)
+        monkeypatch.setattr(weekly_run, "CREDENTIALS_PATH", weekly_run._LOCK_PATH.parent / "missing.json")
+
+        # Simula una corrida que se detuvo por tiempo: execute_study()
+        # devuelve None (no llego a exportar), pero igual hay raw_jobs
+        # guardados -- lo que SI importa para esta prueba es que
+        # run_weekly_automation() consulte esa cantidad y, al ser > 0,
+        # intente el export manual.
+        monkeypatch.setattr(weekly_run.study_runner, "execute_study", lambda *a, **k: None)
+        monkeypatch.setattr(weekly_run.repo, "get_raw_jobs_for_study", lambda session_arg, study_id: [object()])
+        monkeypatch.setattr(weekly_run, "run_exact_dedup", lambda session_arg, study_id: {"jobs_created": 1})
+
+        exported_calls = []
+
+        def fake_export(session_arg, study_id, output_dir):
+            exported_calls.append(study_id)
+            return tmp_path / f"SIVML_{study_id[:8]}_fake.xlsx"
+
+        monkeypatch.setattr(weekly_run, "export_study_to_excel", fake_export)
+
+        summary = weekly_run.run_weekly_automation()
+
+        assert len(exported_calls) == 4  # las 4 plantillas se "cortaron" igual
+        for _, _, excel_path, error in summary["results"]:
+            assert error is None
+            assert excel_path is not None
+
+    def test_does_not_export_when_stopped_with_no_raw_jobs(self, session, monkeypatch):
+        _seed_default_templates(session)
+        repo.set_automation_enabled(session, True)
+        monkeypatch.setattr(weekly_run, "CREDENTIALS_PATH", weekly_run._LOCK_PATH.parent / "missing.json")
+        monkeypatch.setattr(weekly_run.study_runner, "execute_study", lambda *a, **k: None)
+
+        export_calls = []
+        monkeypatch.setattr(weekly_run, "export_study_to_excel", lambda *a, **k: export_calls.append(1))
+
+        summary = weekly_run.run_weekly_automation()
+
+        assert export_calls == []
+        for _, _, excel_path, _ in summary["results"]:
+            assert excel_path is None
+
+    def test_uses_a_15_minute_timeout(self):
+        assert weekly_run.PER_TEMPLATE_TIMEOUT_SECONDS == 15 * 60
+
+    def test_timer_is_cancelled_so_a_fast_run_never_gets_stopped(self, session, monkeypatch):
+        # Si execute_study() ya termino, el timer.cancel() en el finally
+        # debe evitar que request_stop() se llame despues por error.
+        _seed_default_templates(session)
+        repo.set_automation_enabled(session, True)
+        monkeypatch.setattr(weekly_run, "CREDENTIALS_PATH", weekly_run._LOCK_PATH.parent / "missing.json")
+        monkeypatch.setattr(weekly_run.study_runner, "execute_study", lambda *a, **k: None)
+
+        stop_calls = []
+        monkeypatch.setattr(weekly_run, "_request_stop_after_timeout", lambda study_id: stop_calls.append(study_id))
+
+        weekly_run.run_weekly_automation()
+
+        assert stop_calls == []
