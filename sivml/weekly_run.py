@@ -39,6 +39,33 @@ logger = logging.getLogger("sivml.weekly_run")
 CREDENTIALS_PATH = ROOT / "credentials" / "google_oauth_client.json"
 
 
+def _needs_catchup_run(settings) -> bool:
+    """
+    True si la automatizacion no ha corrido todavia esta semana (semana =
+    desde el lunes mas reciente, inclusive). Usado por main() para que el
+    disparador de respaldo diario (scripts/install_weekly_task.py,
+    tarea SIVML_CorridaSemanal_Catchup) se ponga al dia sin duplicar trabajo
+    si el usuario inicia sesion varias veces en la misma semana, y sin
+    interferir con la Tarea Programada principal de los lunes 7am (si esa ya
+    corrio, el disparador de respaldo no hace nada esa semana).
+
+    No se usa dentro de run_weekly_automation() a proposito: el boton
+    "Probar ahora" del dashboard llama run_weekly_automation() directamente
+    y SIEMPRE debe poder forzar una corrida, sin importar si ya corrio esta
+    semana.
+
+    La tarea de respaldo dispara TODOS los dias (no solo al iniciar
+    sesion: ese tipo de disparador tambien exige permisos de admin para
+    crearla, confirmado en vivo) -- este chequeo es lo que evita que se
+    repita el trabajo cada dia una vez que ya corrio esa semana.
+    """
+    if settings.last_run_at is None:
+        return True
+    today = date.today()
+    most_recent_monday = today - timedelta(days=today.weekday())
+    return settings.last_run_at.date() < most_recent_monday
+
+
 def _build_cfg_from_template(tpl, date_from: date, date_to: date) -> StudyConfig:
     return StudyConfig(
         study_name=f"{tpl.name} ({date_from} / {date_to})",
@@ -159,6 +186,17 @@ def main() -> int:
             logging.StreamHandler(),
         ],
     )
+
+    init_db()
+    session = SessionLocal()
+    try:
+        settings = repo.get_automation_settings(session)
+        if not _needs_catchup_run(settings):
+            logger.info("Ya corrio esta semana, no se hace nada (disparador de las 7am o de respaldo repetido).")
+            return 0
+    finally:
+        session.close()
+
     summary = run_weekly_automation()
     logger.info(summary["message"])
     return 0

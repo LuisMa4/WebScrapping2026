@@ -859,23 +859,33 @@ def _render_automation_section(session) -> None:
         with bcol2:
             with st.popover("Instalar tarea programada de Windows"):
                 st.caption(
-                    "Crea una Tarea Programada de Windows que corre "
-                    "`weekly_run.py` cada lunes a las 7:00 AM."
+                    "Crea DOS Tareas Programadas de Windows: la principal "
+                    "corre `weekly_run.py` cada lunes a las 7:00 AM; una de "
+                    "respaldo corre todos los dias a las 8:00 PM y se pone "
+                    "al dia sola si el lunes se salto porque no habia "
+                    "sesion iniciada a esa hora (confirmado que esto pasa "
+                    "en la practica)."
                 )
-                from scripts.install_weekly_task import build_schtasks_command
+                from scripts.install_weekly_task import build_schtasks_command, build_catchup_schtasks_command
                 st.code(" ".join(build_schtasks_command()))
+                st.code(" ".join(build_catchup_schtasks_command()))
                 confirm_task = st.checkbox(
-                    "Confirmo que quiero instalar esta tarea programada",
+                    "Confirmo que quiero instalar estas tareas programadas",
                     key="confirm_install_task",
                 )
                 if st.button("Instalar", key="install_task_btn"):
                     if confirm_task:
-                        from scripts.install_weekly_task import install_task
-                        ok, output = install_task()
-                        if ok:
-                            st.success("Tarea programada instalada correctamente.")
+                        from scripts.install_weekly_task import install_task, install_catchup_task
+                        ok1, output1 = install_task()
+                        ok2, output2 = install_catchup_task()
+                        if ok1:
+                            st.success(f"Tarea principal instalada. {output1}")
                         else:
-                            st.error(f"No se pudo instalar: {output}")
+                            st.error(f"No se pudo instalar la tarea principal: {output1}")
+                        if ok2:
+                            st.success(f"Tarea de respaldo instalada. {output2}")
+                        else:
+                            st.error(f"No se pudo instalar la tarea de respaldo: {output2}")
                     else:
                         st.error("Marca la casilla de confirmacion primero.")
 

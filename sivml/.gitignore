@@ -15,3 +15,4 @@ build/
 *.egg-info/
 .sivml_draft_nuevo_estudio.json
 sivml_weekly_run.log
+sivml_backfill_*.log

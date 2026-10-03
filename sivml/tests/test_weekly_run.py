@@ -232,3 +232,59 @@ class TestRunWeeklyAutomationEnabled:
         assert settings.last_run_at is not None
         assert settings.last_run_status in ("success", "partial", "failed")
         assert "4/4" in settings.last_run_message
+
+
+class TestNeedsCatchupRun:
+    """
+    _needs_catchup_run() decide si el disparador de respaldo "al iniciar
+    sesion" debe correr -- True si no ha corrido nada esta semana (desde el
+    lunes mas reciente), False si ya corrio.
+    """
+
+    def test_true_when_never_run(self):
+        settings = type("S", (), {"last_run_at": None})()
+        assert weekly_run._needs_catchup_run(settings) is True
+
+    def test_false_when_already_ran_this_week(self):
+        today = date.today()
+        most_recent_monday = today - timedelta(days=today.weekday())
+        settings = type("S", (), {"last_run_at": datetime.combine(most_recent_monday, datetime.min.time())})()
+        assert weekly_run._needs_catchup_run(settings) is False
+
+    def test_true_when_last_run_was_before_this_week(self):
+        today = date.today()
+        most_recent_monday = today - timedelta(days=today.weekday())
+        last_week = most_recent_monday - timedelta(days=1)
+        settings = type("S", (), {"last_run_at": datetime.combine(last_week, datetime.min.time())})()
+        assert weekly_run._needs_catchup_run(settings) is True
+
+
+class TestMainCatchupSkip:
+    def test_main_skips_run_weekly_automation_when_already_ran_this_week(self, session, monkeypatch, tmp_path):
+        repo.set_automation_enabled(session, True)
+        repo.record_automation_run(session, status="success", message="ya corrio")
+
+        called = []
+        monkeypatch.setattr(weekly_run, "run_weekly_automation", lambda: called.append(1))
+        monkeypatch.setattr(weekly_run, "ROOT", tmp_path)
+
+        weekly_run.main()
+
+        assert called == []
+
+    def test_main_runs_when_not_yet_run_this_week(self, session, monkeypatch, tmp_path):
+        repo.set_automation_enabled(session, True)
+        today = date.today()
+        most_recent_monday = today - timedelta(days=today.weekday())
+        last_week = most_recent_monday - timedelta(days=7)
+        settings = repo.get_automation_settings(session)
+        settings.last_run_at = datetime.combine(last_week, datetime.min.time())
+        session.commit()
+
+        called = []
+        monkeypatch.setattr(weekly_run, "run_weekly_automation", lambda: called.append(1) or {"message": "ok"})
+        monkeypatch.setattr(weekly_run, "ROOT", tmp_path)
+
+        weekly_run.main()
+
+        assert called == [1]
