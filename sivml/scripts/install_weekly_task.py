@@ -11,13 +11,18 @@ en ese instante exacto (ver gotcha de /ru + /np en la memoria del
 proyecto -- requiere una cuenta Windows local con permisos de admin que
 este usuario no tiene). Si el usuario no esta con sesion iniciada justo a
 esa hora, el lunes completo se pierde sin aviso -- confirmado en vivo 4
-semanas seguidas. La tarea de respaldo corre todos los dias a una hora
-fija (no "al iniciar sesion": ese tipo de disparador TAMBIEN exige
-elevacion -- "Acceso denegado" al crearla sin admin, confirmado en vivo);
-weekly_run.py::main() se pone al dia solo si todavia no corrio nada esta
-semana (_needs_catchup_run), asi que disparar todos los dias no duplica
-trabajo -- simplemente reintenta hasta que un dia si hay sesion iniciada
-a esa hora.
+semanas seguidas.
+
+La tarea de respaldo corre cada 30 minutos (intervalo, no un disparador de
+evento): "al iniciar sesion" y "al arrancar la PC" (/sc onlogon, /sc
+onstart) TAMBIEN exigen elevacion -- "Acceso denegado" al crear cualquiera
+de las dos sin admin, confirmado en vivo -- pero un intervalo de minutos
+(/sc minute /mo N) no la necesita. weekly_run.py::main() se pone al dia
+solo si todavia no corrio nada esta semana (_needs_catchup_run), asi que
+disparar cada 30 min no duplica trabajo -- en el caso comun (ya corrio
+esta semana) solo abre la BD, revisa una fecha y sale, practicamente
+gratis. Efecto practico: como mucho 30 min despues de prender la PC o
+iniciar sesion, si hace falta ponerse al dia, se pone al dia sola.
 """
 from __future__ import annotations
 
@@ -72,21 +77,21 @@ def uninstall_task() -> tuple[bool, str]:
     return ok, output.strip()
 
 
-def build_catchup_schtasks_command(hour_minute: str = "20:00", python_exe: str | None = None) -> list[str]:
+def build_catchup_schtasks_command(interval_minutes: int = 30, python_exe: str | None = None) -> list[str]:
     python_exe = python_exe or sys.executable
     script_path = ROOT / "weekly_run.py"
     return [
         "schtasks", "/create",
         "/tn", CATCHUP_TASK_NAME,
         "/tr", f'"{python_exe}" "{script_path}"',
-        "/sc", "daily",
-        "/st", hour_minute,
+        "/sc", "minute",
+        "/mo", str(interval_minutes),
         "/f",
     ]
 
 
-def install_catchup_task(hour_minute: str = "20:00", python_exe: str | None = None) -> tuple[bool, str]:
-    cmd = build_catchup_schtasks_command(hour_minute, python_exe)
+def install_catchup_task(interval_minutes: int = 30, python_exe: str | None = None) -> tuple[bool, str]:
+    cmd = build_catchup_schtasks_command(interval_minutes, python_exe)
     result = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
     ok = result.returncode == 0
     output = result.stdout if ok else (result.stderr or result.stdout)

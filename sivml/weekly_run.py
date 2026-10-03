@@ -43,21 +43,23 @@ def _needs_catchup_run(settings) -> bool:
     """
     True si la automatizacion no ha corrido todavia esta semana (semana =
     desde el lunes mas reciente, inclusive). Usado por main() para que el
-    disparador de respaldo diario (scripts/install_weekly_task.py,
-    tarea SIVML_CorridaSemanal_Catchup) se ponga al dia sin duplicar trabajo
-    si el usuario inicia sesion varias veces en la misma semana, y sin
-    interferir con la Tarea Programada principal de los lunes 7am (si esa ya
-    corrio, el disparador de respaldo no hace nada esa semana).
+    disparador de respaldo (scripts/install_weekly_task.py, tarea
+    SIVML_CorridaSemanal_Catchup) se ponga al dia sin duplicar trabajo si
+    dispara varias veces en la misma semana, y sin interferir con la Tarea
+    Programada principal de los lunes 7am (si esa ya corrio, el disparador
+    de respaldo no hace nada esa semana).
 
     No se usa dentro de run_weekly_automation() a proposito: el boton
     "Probar ahora" del dashboard llama run_weekly_automation() directamente
     y SIEMPRE debe poder forzar una corrida, sin importar si ya corrio esta
     semana.
 
-    La tarea de respaldo dispara TODOS los dias (no solo al iniciar
-    sesion: ese tipo de disparador tambien exige permisos de admin para
-    crearla, confirmado en vivo) -- este chequeo es lo que evita que se
-    repita el trabajo cada dia una vez que ya corrio esa semana.
+    La tarea de respaldo dispara cada 30 minutos (no "al iniciar sesion" ni
+    "al arrancar la PC": esos tipos de disparador tambien exigen permisos
+    de admin para crearlos, confirmado en vivo con ambos) -- este chequeo
+    es lo que evita que se repita el trabajo cada 30 min una vez que ya
+    corrio esa semana; en el caso comun (ya corrio) la tarea abre la BD,
+    revisa una fecha y sale, practicamente gratis.
     """
     if settings.last_run_at is None:
         return True
