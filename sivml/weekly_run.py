@@ -11,7 +11,6 @@ import json
 import logging
 import os
 import sys
-import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -45,19 +44,29 @@ CREDENTIALS_PATH = ROOT / "credentials" / "google_oauth_client.json"
 # vuelve False cuando la corrida TERMINA, asi que sin este lock, cada
 # disparo de 30 min mientras la primera corrida sigue en curso lanzaria OTRA
 # corrida completa en paralelo (mismo riesgo si "Probar ahora" se usa
-# mientras la Tarea Programada ya esta corriendo). Un lock viejo (el proceso
-# murio sin limpiar, ej. lo mate el usuario o crasheo) se trata como
-# abandonado despues de _LOCK_STALE_SECONDS y se toma de todos modos --
-# mismo principio que el "estudio colgado" de gotcha #13 del proyecto.
+# mientras la Tarea Programada ya esta corriendo).
+#
+# El lock guarda el PID del proceso que lo tomo. Para decidir si un lock
+# esta "vivo" o "abandonado" se revisa si ese PID sigue corriendo de
+# verdad (psutil.pid_exists) -- NO un limite de tiempo fijo: una corrida
+# real y lenta (6+ horas, ej. muchas ciudades/keywords en LinkedIn) no
+# deberia confundirse con un proceso muerto solo por tardar. Si el PID ya
+# no existe (el proceso murio sin limpiar -- crash, lo mataron, apagon),
+# el lock se trata como abandonado y se toma de todos modos -- mismo
+# principio que el "estudio colgado" de gotcha #13 del proyecto.
 _LOCK_PATH = ROOT / ".weekly_run.lock"
-_LOCK_STALE_SECONDS = 6 * 60 * 60  # 6h -- generoso, ninguna corrida real observada paso de ~3h
 
 
 def _acquire_lock() -> bool:
     if _LOCK_PATH.exists():
-        age = time.time() - _LOCK_PATH.stat().st_mtime
-        if age < _LOCK_STALE_SECONDS:
-            return False
+        try:
+            held_by_pid = int(_LOCK_PATH.read_text(encoding="utf-8").strip())
+        except (ValueError, OSError):
+            held_by_pid = None
+        if held_by_pid is not None:
+            import psutil
+            if psutil.pid_exists(held_by_pid):
+                return False
     _LOCK_PATH.write_text(str(os.getpid()), encoding="utf-8")
     return True
 

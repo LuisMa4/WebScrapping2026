@@ -300,15 +300,17 @@ class TestMainCatchupSkip:
 
 class TestOverlapLock:
     """
-    run_weekly_automation() usa un lock de archivo para que el disparador
-    de respaldo (cada 30 min) no lance una segunda corrida mientras una
-    anterior (que puede tardar horas) todavia esta en curso.
+    run_weekly_automation() usa un lock de archivo (con el PID del dueno)
+    para que el disparador de respaldo (cada 30 min) no lance una segunda
+    corrida mientras una anterior -- sin importar cuanto tarde, minutos u
+    horas -- todavia esta en curso de verdad.
     """
 
-    def test_skips_run_when_lock_is_fresh(self, session, monkeypatch):
+    def test_skips_run_when_lock_is_held_by_a_live_pid(self, session, monkeypatch):
         _seed_default_templates(session)
         repo.set_automation_enabled(session, True)
-        weekly_run._LOCK_PATH.write_text("12345", encoding="utf-8")
+        # Usa el PID de este mismo proceso de test -- por definicion esta vivo.
+        weekly_run._LOCK_PATH.write_text(str(os.getpid()), encoding="utf-8")
 
         called = []
         monkeypatch.setattr(weekly_run.study_runner, "execute_study", lambda *a, **k: called.append(1))
@@ -319,19 +321,39 @@ class TestOverlapLock:
         assert called == []
         assert "progreso" in summary["message"].lower()
 
-    def test_runs_when_lock_is_stale(self, session, monkeypatch):
+    def test_runs_when_lock_is_held_by_a_dead_pid(self, session, monkeypatch):
         _seed_default_templates(session)
         repo.set_automation_enabled(session, True)
         monkeypatch.setattr(weekly_run, "CREDENTIALS_PATH", weekly_run._LOCK_PATH.parent / "missing.json")
         monkeypatch.setattr(weekly_run.study_runner, "execute_study", lambda *a, **k: None)
 
-        weekly_run._LOCK_PATH.write_text("12345", encoding="utf-8")
-        stale_time = time.time() - weekly_run._LOCK_STALE_SECONDS - 60
-        os.utime(weekly_run._LOCK_PATH, (stale_time, stale_time))
+        # PID que casi seguro no existe -- simula un proceso que murio sin
+        # limpiar su propio lock (crash, lo mataron, apagon).
+        weekly_run._LOCK_PATH.write_text("999999999", encoding="utf-8")
 
         summary = weekly_run.run_weekly_automation()
 
         assert summary["ran"] is True
+
+    def test_a_real_run_longer_than_the_old_fixed_timeout_is_not_mistaken_for_dead(self, session, monkeypatch):
+        # Regresion: una version anterior de este lock usaba un umbral de
+        # tiempo fijo (6h) en vez del PID -- una corrida real y lenta se
+        # habria confundido con "abandonada" y se le habria superpuesto
+        # una segunda corrida. Simula un lock "viejo" (mtime de hace 10
+        # horas) pero sostenido por un PID vivo: debe seguir respetandose.
+        _seed_default_templates(session)
+        repo.set_automation_enabled(session, True)
+        weekly_run._LOCK_PATH.write_text(str(os.getpid()), encoding="utf-8")
+        ten_hours_ago = time.time() - 10 * 60 * 60
+        os.utime(weekly_run._LOCK_PATH, (ten_hours_ago, ten_hours_ago))
+
+        called = []
+        monkeypatch.setattr(weekly_run.study_runner, "execute_study", lambda *a, **k: called.append(1))
+
+        summary = weekly_run.run_weekly_automation()
+
+        assert summary["ran"] is False
+        assert called == []
 
     def test_releases_lock_after_a_normal_run(self, session, monkeypatch):
         _seed_default_templates(session)
