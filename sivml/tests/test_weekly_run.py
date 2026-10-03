@@ -3,6 +3,7 @@ import os
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 import json
+import time
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -38,6 +39,13 @@ def session(TestSessionLocal):
 @pytest.fixture(autouse=True)
 def patch_session_local(monkeypatch, TestSessionLocal):
     monkeypatch.setattr(weekly_run, "SessionLocal", TestSessionLocal)
+
+
+@pytest.fixture(autouse=True)
+def patch_lock_path(monkeypatch, tmp_path):
+    # Nunca tocar el lock file real del proyecto desde un test -- usa uno
+    # aislado en tmp_path, distinto por test.
+    monkeypatch.setattr(weekly_run, "_LOCK_PATH", tmp_path / ".weekly_run.lock")
 
 
 def _seed_template(session, tid: int, name: str) -> None:
@@ -288,3 +296,68 @@ class TestMainCatchupSkip:
         weekly_run.main()
 
         assert called == [1]
+
+
+class TestOverlapLock:
+    """
+    run_weekly_automation() usa un lock de archivo para que el disparador
+    de respaldo (cada 30 min) no lance una segunda corrida mientras una
+    anterior (que puede tardar horas) todavia esta en curso.
+    """
+
+    def test_skips_run_when_lock_is_fresh(self, session, monkeypatch):
+        _seed_default_templates(session)
+        repo.set_automation_enabled(session, True)
+        weekly_run._LOCK_PATH.write_text("12345", encoding="utf-8")
+
+        called = []
+        monkeypatch.setattr(weekly_run.study_runner, "execute_study", lambda *a, **k: called.append(1))
+
+        summary = weekly_run.run_weekly_automation()
+
+        assert summary["ran"] is False
+        assert called == []
+        assert "progreso" in summary["message"].lower()
+
+    def test_runs_when_lock_is_stale(self, session, monkeypatch):
+        _seed_default_templates(session)
+        repo.set_automation_enabled(session, True)
+        monkeypatch.setattr(weekly_run, "CREDENTIALS_PATH", weekly_run._LOCK_PATH.parent / "missing.json")
+        monkeypatch.setattr(weekly_run.study_runner, "execute_study", lambda *a, **k: None)
+
+        weekly_run._LOCK_PATH.write_text("12345", encoding="utf-8")
+        stale_time = time.time() - weekly_run._LOCK_STALE_SECONDS - 60
+        os.utime(weekly_run._LOCK_PATH, (stale_time, stale_time))
+
+        summary = weekly_run.run_weekly_automation()
+
+        assert summary["ran"] is True
+
+    def test_releases_lock_after_a_normal_run(self, session, monkeypatch):
+        _seed_default_templates(session)
+        repo.set_automation_enabled(session, True)
+        monkeypatch.setattr(weekly_run, "CREDENTIALS_PATH", weekly_run._LOCK_PATH.parent / "missing.json")
+        monkeypatch.setattr(weekly_run.study_runner, "execute_study", lambda *a, **k: None)
+
+        weekly_run.run_weekly_automation()
+
+        assert not weekly_run._LOCK_PATH.exists()
+
+    def test_releases_lock_even_when_disabled(self, session):
+        repo.set_automation_enabled(session, False)
+
+        weekly_run.run_weekly_automation()
+
+        assert not weekly_run._LOCK_PATH.exists()
+
+    def test_second_call_can_run_after_first_releases_the_lock(self, session, monkeypatch):
+        _seed_default_templates(session)
+        repo.set_automation_enabled(session, True)
+        monkeypatch.setattr(weekly_run, "CREDENTIALS_PATH", weekly_run._LOCK_PATH.parent / "missing.json")
+        monkeypatch.setattr(weekly_run.study_runner, "execute_study", lambda *a, **k: None)
+
+        first = weekly_run.run_weekly_automation()
+        second = weekly_run.run_weekly_automation()
+
+        assert first["ran"] is True
+        assert second["ran"] is True

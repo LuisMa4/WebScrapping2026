@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import sys
+import time
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -37,6 +38,35 @@ logger = logging.getLogger("sivml.weekly_run")
 # generado tras la primera autorizacion se guarda junto a este archivo
 # como google_oauth_token.json (ver integrations/google_drive.py).
 CREDENTIALS_PATH = ROOT / "credentials" / "google_oauth_client.json"
+
+# Evita corridas duplicadas superpuestas: el disparador de respaldo dispara
+# cada 30 min (scripts/install_weekly_task.py), pero una corrida real puede
+# tardar horas (visto en vivo: 1-3+ horas) -- _needs_catchup_run() solo se
+# vuelve False cuando la corrida TERMINA, asi que sin este lock, cada
+# disparo de 30 min mientras la primera corrida sigue en curso lanzaria OTRA
+# corrida completa en paralelo (mismo riesgo si "Probar ahora" se usa
+# mientras la Tarea Programada ya esta corriendo). Un lock viejo (el proceso
+# murio sin limpiar, ej. lo mate el usuario o crasheo) se trata como
+# abandonado despues de _LOCK_STALE_SECONDS y se toma de todos modos --
+# mismo principio que el "estudio colgado" de gotcha #13 del proyecto.
+_LOCK_PATH = ROOT / ".weekly_run.lock"
+_LOCK_STALE_SECONDS = 6 * 60 * 60  # 6h -- generoso, ninguna corrida real observada paso de ~3h
+
+
+def _acquire_lock() -> bool:
+    if _LOCK_PATH.exists():
+        age = time.time() - _LOCK_PATH.stat().st_mtime
+        if age < _LOCK_STALE_SECONDS:
+            return False
+    _LOCK_PATH.write_text(str(os.getpid()), encoding="utf-8")
+    return True
+
+
+def _release_lock() -> None:
+    try:
+        _LOCK_PATH.unlink()
+    except FileNotFoundError:
+        pass
 
 
 def _needs_catchup_run(settings) -> bool:
@@ -93,12 +123,30 @@ def run_weekly_automation() -> dict:
     dashboard (muestra el resultado al usuario):
 
         {
-            "ran": bool,   # False si la automatizacion esta desactivada
+            "ran": bool,   # False si la automatizacion esta desactivada o ya hay otra corrida en progreso
             "results": [(template_name, study_id|None, excel_path|None, error|None), ...],
             "upload": UploadResult | None,
             "message": str,
         }
+
+    Protegido con un lock de archivo (ver _acquire_lock) para que no se
+    superpongan dos corridas si el disparador de respaldo (cada 30 min)
+    dispara mientras una corrida anterior todavia esta en progreso, o si
+    "Probar ahora" se usa mientras la Tarea Programada ya esta corriendo.
     """
+    if not _acquire_lock():
+        logger.info("Ya hay una corrida en progreso (lock activo), no se hace nada.")
+        return {
+            "ran": False, "results": [], "upload": None,
+            "message": "Ya hay una corrida en progreso (lock activo).",
+        }
+    try:
+        return _run_weekly_automation_locked()
+    finally:
+        _release_lock()
+
+
+def _run_weekly_automation_locked() -> dict:
     init_db()
     session = SessionLocal()
     try:
