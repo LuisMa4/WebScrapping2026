@@ -55,10 +55,14 @@ class TestBuildCatchupSchtasksCommand:
         assert "onlogon" not in cmd
         assert "onstart" not in cmd
 
-    def test_defaults_to_30_minute_interval(self):
+    def test_defaults_to_6_hour_interval(self):
+        # 6h en vez de 30 min: decision explicita del usuario tras pesar el
+        # trade-off (menos "ruido" de revisiones vs. apagar del todo y
+        # arriesgar quedarse dormida si la tarea principal falla, ver
+        # docstring del modulo) -- 360 minutos = 6 horas.
         cmd = install_weekly_task.build_catchup_schtasks_command()
         mo_index = cmd.index("/mo")
-        assert cmd[mo_index + 1] == "30"
+        assert cmd[mo_index + 1] == "360"
 
     def test_custom_interval_is_used(self):
         cmd = install_weekly_task.build_catchup_schtasks_command(interval_minutes=15)

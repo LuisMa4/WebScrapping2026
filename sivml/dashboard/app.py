@@ -862,10 +862,12 @@ def _render_automation_section(session) -> None:
                 st.caption(
                     "Crea DOS Tareas Programadas de Windows: la principal "
                     "corre `weekly_run.py` cada lunes a las 7:00 AM; una de "
-                    "respaldo revisa cada 30 minutos y se pone al dia sola "
-                    "(como mucho 30 min despues de prender la PC) si el "
-                    "lunes se salto porque no habia sesion iniciada a esa "
-                    "hora (confirmado que esto pasa en la practica)."
+                    "respaldo revisa cada 6 horas y se pone al dia sola si "
+                    "el lunes se salto porque no habia sesion iniciada a "
+                    "esa hora (confirmado que esto pasa en la practica). "
+                    "No se apaga sola tras correr -- sigue revisando con "
+                    "menos frecuencia para garantizar que nunca se quede "
+                    "dormida sin que nadie se de cuenta."
                 )
                 from scripts.install_weekly_task import build_schtasks_command, build_catchup_schtasks_command
                 st.code(" ".join(build_schtasks_command()))

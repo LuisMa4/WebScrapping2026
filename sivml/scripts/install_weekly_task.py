@@ -13,16 +13,27 @@ este usuario no tiene). Si el usuario no esta con sesion iniciada justo a
 esa hora, el lunes completo se pierde sin aviso -- confirmado en vivo 4
 semanas seguidas.
 
-La tarea de respaldo corre cada 30 minutos (intervalo, no un disparador de
+La tarea de respaldo corre cada 6 horas (intervalo, no un disparador de
 evento): "al iniciar sesion" y "al arrancar la PC" (/sc onlogon, /sc
 onstart) TAMBIEN exigen elevacion -- "Acceso denegado" al crear cualquiera
 de las dos sin admin, confirmado en vivo -- pero un intervalo de minutos
 (/sc minute /mo N) no la necesita. weekly_run.py::main() se pone al dia
 solo si todavia no corrio nada esta semana (_needs_catchup_run), asi que
-disparar cada 30 min no duplica trabajo -- en el caso comun (ya corrio
-esta semana) solo abre la BD, revisa una fecha y sale, practicamente
-gratis. Efecto practico: como mucho 30 min despues de prender la PC o
-iniciar sesion, si hace falta ponerse al dia, se pone al dia sola.
+disparar cada 6h no duplica trabajo -- en el caso comun (ya corrio esta
+semana) solo abre la BD, revisa una fecha y sale, practicamente gratis.
+
+Por que 6h y no cada 30 min (version anterior, 2026-10-03): el usuario
+pidio explicitamente que NO siga revisando una vez que ya corrio esta
+semana. La forma "perfecta" de lograrlo seria apagar la tarea despues de
+correr y prenderla de nuevo el lunes -- pero eso necesitaria otro
+disparador confiable para prenderla, y el unico candidato (la tarea
+principal de 7am) es justo la que a veces falla en silencio: si fallara
+justo esa semana, el respaldo se quedaria apagado sin que nadie se diera
+cuenta, perdiendo la garantia que se construyo. Se eligio reducir la
+frecuencia en vez de apagar del todo: mucho menos "ruido" (4 veces al dia
+en vez de 48) sin sacrificar la garantia de que SIEMPRE se va a poner al
+dia sola, sin excepcion, decision explicita del usuario tras explicarle
+este trade-off.
 """
 from __future__ import annotations
 
@@ -77,7 +88,7 @@ def uninstall_task() -> tuple[bool, str]:
     return ok, output.strip()
 
 
-def build_catchup_schtasks_command(interval_minutes: int = 30, python_exe: str | None = None) -> list[str]:
+def build_catchup_schtasks_command(interval_minutes: int = 360, python_exe: str | None = None) -> list[str]:
     python_exe = python_exe or sys.executable
     script_path = ROOT / "weekly_run.py"
     return [
@@ -90,7 +101,7 @@ def build_catchup_schtasks_command(interval_minutes: int = 30, python_exe: str |
     ]
 
 
-def install_catchup_task(interval_minutes: int = 30, python_exe: str | None = None) -> tuple[bool, str]:
+def install_catchup_task(interval_minutes: int = 360, python_exe: str | None = None) -> tuple[bool, str]:
     cmd = build_catchup_schtasks_command(interval_minutes, python_exe)
     result = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
     ok = result.returncode == 0

@@ -62,10 +62,10 @@ def _request_stop_after_timeout(study_id: str) -> None:
 CREDENTIALS_PATH = ROOT / "credentials" / "google_oauth_client.json"
 
 # Evita corridas duplicadas superpuestas: el disparador de respaldo dispara
-# cada 30 min (scripts/install_weekly_task.py), pero una corrida real puede
+# cada 6 horas (scripts/install_weekly_task.py), pero una corrida real puede
 # tardar horas (visto en vivo: 1-3+ horas) -- _needs_catchup_run() solo se
-# vuelve False cuando la corrida TERMINA, asi que sin este lock, cada
-# disparo de 30 min mientras la primera corrida sigue en curso lanzaria OTRA
+# vuelve False cuando la corrida TERMINA, asi que sin este lock, un disparo
+# del respaldo mientras la primera corrida sigue en curso lanzaria OTRA
 # corrida completa en paralelo (mismo riesgo si "Probar ahora" se usa
 # mientras la Tarea Programada ya esta corriendo).
 #
@@ -116,12 +116,14 @@ def _needs_catchup_run(settings) -> bool:
     y SIEMPRE debe poder forzar una corrida, sin importar si ya corrio esta
     semana.
 
-    La tarea de respaldo dispara cada 30 minutos (no "al iniciar sesion" ni
+    La tarea de respaldo dispara cada 6 horas (no "al iniciar sesion" ni
     "al arrancar la PC": esos tipos de disparador tambien exigen permisos
-    de admin para crearlos, confirmado en vivo con ambos) -- este chequeo
-    es lo que evita que se repita el trabajo cada 30 min una vez que ya
-    corrio esa semana; en el caso comun (ya corrio) la tarea abre la BD,
-    revisa una fecha y sale, practicamente gratis.
+    de admin para crearlos, confirmado en vivo con ambos; tampoco se apaga
+    tras correr -- necesitaria algo igual de confiable para prenderla de
+    nuevo el lunes, y no existe sin admin, ver install_weekly_task.py) --
+    este chequeo es lo que evita que se repita el trabajo cada 6h una vez
+    que ya corrio esa semana; en el caso comun (ya corrio) la tarea abre
+    la BD, revisa una fecha y sale, practicamente gratis.
     """
     if settings.last_run_at is None:
         return True
@@ -162,7 +164,7 @@ def run_weekly_automation() -> dict:
         }
 
     Protegido con un lock de archivo (ver _acquire_lock) para que no se
-    superpongan dos corridas si el disparador de respaldo (cada 30 min)
+    superpongan dos corridas si el disparador de respaldo (cada 6h)
     dispara mientras una corrida anterior todavia esta en progreso, o si
     "Probar ahora" se usa mientras la Tarea Programada ya esta corriendo.
     """
